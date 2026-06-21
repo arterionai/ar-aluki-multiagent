@@ -5,22 +5,34 @@ namespace Aluki.Runtime.Capture.Persistence;
 
 /// <summary>
 /// Creates open PostgreSQL connections. The connection string is resolved from
-/// <c>Postgres:ConnectionString</c> and falls back to the Key Vault-backed
-/// <c>PostgresConnectionString</c> secret (mapped to a flat configuration key).
+/// the first configured of: <c>Postgres:ConnectionString</c>,
+/// <c>Postgres:AppConnection</c>, <c>Postgres:AdminConnection</c>, or the flat
+/// Key Vault-backed <c>PostgresConnectionString</c>. The deployed Function App
+/// supplies <c>Postgres__AppConnection</c> as a Key Vault reference.
 /// </summary>
 public sealed class NpgsqlConnectionFactory
 {
+    private static readonly string[] ConnectionStringKeys =
+    [
+        "Postgres:ConnectionString",
+        "Postgres:AppConnection",
+        "Postgres:AdminConnection",
+        "PostgresConnectionString"
+    ];
+
     private readonly string? _connectionString;
 
     public NpgsqlConnectionFactory(IConfiguration configuration)
     {
-        var configured = configuration["Postgres:ConnectionString"];
-        if (string.IsNullOrWhiteSpace(configured))
+        foreach (var key in ConnectionStringKeys)
         {
-            configured = configuration["PostgresConnectionString"];
+            var value = configuration[key];
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                _connectionString = value;
+                break;
+            }
         }
-
-        _connectionString = configured;
     }
 
     /// <summary>True when a connection string is available.</summary>
@@ -31,8 +43,9 @@ public sealed class NpgsqlConnectionFactory
         if (string.IsNullOrWhiteSpace(_connectionString))
         {
             throw new InvalidOperationException(
-                "PostgreSQL connection string is not configured. Set 'Postgres:ConnectionString' " +
-                "or provide the 'PostgresConnectionString' secret.");
+                "PostgreSQL connection string is not configured. Set one of " +
+                "'Postgres:ConnectionString', 'Postgres:AppConnection', " +
+                "'Postgres:AdminConnection', or the 'PostgresConnectionString' secret.");
         }
 
         var connection = new NpgsqlConnection(_connectionString);
