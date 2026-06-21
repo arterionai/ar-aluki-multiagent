@@ -1,7 +1,9 @@
-using Azure.Identity;
+using Aluki.Runtime.Capture;
 using Aluki.Runtime.Host;
+using Aluki.Runtime.Host.Channels.WhatsApp;
+using Azure.Identity;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
 var keyVaultSection = builder.Configuration.GetSection("KeyVault");
 var keyVaultEnabled = keyVaultSection.GetValue("Enabled", true);
@@ -10,17 +12,28 @@ var keyVaultUriText = keyVaultSection["VaultUri"];
 
 if (keyVaultEnabled && Uri.TryCreate(keyVaultUriText, UriKind.Absolute, out var keyVaultUri))
 {
-	try
-	{
-		builder.Configuration.AddAzureKeyVault(keyVaultUri, new DefaultAzureCredential());
-	}
-	catch (Exception ex) when (keyVaultOptional)
-	{
-		Console.Error.WriteLine($"Key Vault unavailable. Continuing with local configuration. Reason: {ex.Message}");
-	}
+    try
+    {
+        builder.Configuration.AddAzureKeyVault(keyVaultUri, new DefaultAzureCredential());
+    }
+    catch (Exception ex) when (keyVaultOptional)
+    {
+        Console.Error.WriteLine($"Key Vault unavailable. Continuing with local configuration. Reason: {ex.Message}");
+    }
 }
 
+// WhatsApp capture pipeline (shared with the Functions deployment).
+builder.Services.AddWhatsAppCapture(builder.Configuration);
+
+// Background heartbeat (existing runtime worker)
 builder.Services.AddHostedService<Worker>();
 
-var host = builder.Build();
-host.Run();
+var app = builder.Build();
+
+app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "aluki-runtime-host" }));
+app.MapWhatsAppInbound();
+
+app.Run();
+
+/// <summary>Exposed for WebApplicationFactory-based integration tests.</summary>
+public partial class Program { }

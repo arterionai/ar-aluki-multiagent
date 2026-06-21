@@ -47,34 +47,42 @@ alter table audit_log enable row level security;
 alter table contexts enable row level security;
 
 -- Tenant and membership policies
-create policy if not exists p_messages_tenant on messages
+drop policy if exists p_messages_tenant on messages;
+create policy p_messages_tenant on messages
     using (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id))
     with check (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id));
 
-create policy if not exists p_entities_tenant on entities
+drop policy if exists p_entities_tenant on entities;
+create policy p_entities_tenant on entities
     using (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id))
     with check (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id));
 
-create policy if not exists p_mentions_tenant on entity_mentions
+drop policy if exists p_mentions_tenant on entity_mentions;
+create policy p_mentions_tenant on entity_mentions
     using (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id))
     with check (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id));
 
-create policy if not exists p_relationships_tenant on relationships
+drop policy if exists p_relationships_tenant on relationships;
+create policy p_relationships_tenant on relationships
     using (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id))
     with check (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id));
 
-create policy if not exists p_clusters_tenant on context_clusters
+drop policy if exists p_clusters_tenant on context_clusters;
+create policy p_clusters_tenant on context_clusters
     using (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id))
     with check (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id));
 
-create policy if not exists p_embeddings_tenant on vector_embeddings
+drop policy if exists p_embeddings_tenant on vector_embeddings;
+create policy p_embeddings_tenant on vector_embeddings
     using (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id))
     with check (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id));
 
-create policy if not exists p_audit_tenant on audit_log
+drop policy if exists p_audit_tenant on audit_log;
+create policy p_audit_tenant on audit_log
     using (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id))
     with check (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id));
 
-create policy if not exists p_contexts_tenant on contexts
+drop policy if exists p_contexts_tenant on contexts;
+create policy p_contexts_tenant on contexts
     using (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id))
     with check (tenant_id = app.current_tenant_id() and app.user_in_tenant(tenant_id));
