@@ -70,9 +70,10 @@ public sealed class PersistCaptureSkill : CaptureSkill
 
         if (normalized.Media is { } media)
         {
+            var mediaId = Guid.NewGuid();
             await uow.Media.InsertAsync(
                 new MediaArtifactRow(
-                    MediaId: Guid.NewGuid(),
+                    MediaId: mediaId,
                     TenantId: principal.TenantId,
                     ContextId: principal.ContextId,
                     MessageId: messageId,
@@ -84,6 +85,14 @@ public sealed class PersistCaptureSkill : CaptureSkill
                     ProvenanceEventId: eventId,
                     CreatedAtUtc: now),
                 cancellationToken);
+
+            // Queue async binary download only when the provider gave us a media id
+            // and we don't already have the binary reference.
+            if (!string.IsNullOrWhiteSpace(media.ProviderMediaId) && string.IsNullOrWhiteSpace(media.MediaRefUri))
+            {
+                state.PersistedMedia = new PersistedMediaInfo(
+                    mediaId, messageId, media.ProviderMediaId!, media.ContentType);
+            }
         }
 
         await uow.Idempotency.LinkCanonicalAsync(state.IdempotencyId!.Value, messageId, cancellationToken);

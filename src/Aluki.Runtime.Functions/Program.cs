@@ -1,4 +1,7 @@
 using Aluki.Runtime.Capture;
+using Aluki.Runtime.Capture.Media;
+using Aluki.Runtime.Functions.Media;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 var host = new HostBuilder()
@@ -6,6 +9,13 @@ var host = new HostBuilder()
     .ConfigureServices((context, services) =>
     {
         services.AddWhatsAppCapture(context.Configuration);
+
+        // Async media download (Graph API -> Blob). Overrides the no-op queue.
+        services.AddHttpClient<IMetaMediaClient, MetaMediaClient>();
+        services.AddSingleton<IMediaBlobStore, BlobMediaStore>();
+        services.AddSingleton<IMediaDownloadQueue, StorageQueueMediaDownloadQueue>();
+        services.AddSingleton<IMediaRefUpdater, MediaRefUpdater>();
+        services.AddSingleton<MediaDownloadProcessor>();
     })
     .Build();
 

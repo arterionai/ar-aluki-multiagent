@@ -3,6 +3,7 @@ using Aluki.Runtime.Abstractions.Orchestration;
 using Aluki.Runtime.Abstractions.Persistence;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Abstractions.Skills;
+using Aluki.Runtime.Capture.Media;
 using Aluki.Runtime.Capture.Retry;
 using Aluki.Runtime.Capture.Skills;
 using Aluki.Runtime.Capture.Observability;
@@ -39,6 +40,7 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
     private readonly WriteCaptureAuditSkill _writeCaptureAudit;
     private readonly WriteScopeDeniedAuditSkill _writeScopeDeniedAudit;
     private readonly WriteRetryAuditSkill _writeRetryAudit;
+    private readonly IMediaDownloadQueue _mediaDownloadQueue;
     private readonly ILogger<WhatsAppCaptureCoordinator> _logger;
 
     public WhatsAppCaptureCoordinator(
@@ -54,6 +56,7 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
         WriteCaptureAuditSkill writeCaptureAudit,
         WriteScopeDeniedAuditSkill writeScopeDeniedAudit,
         WriteRetryAuditSkill writeRetryAudit,
+        IMediaDownloadQueue mediaDownloadQueue,
         ILogger<WhatsAppCaptureCoordinator> logger)
     {
         _principalResolver = principalResolver;
@@ -68,6 +71,7 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
         _writeCaptureAudit = writeCaptureAudit;
         _writeScopeDeniedAudit = writeScopeDeniedAudit;
         _writeRetryAudit = writeRetryAudit;
+        _mediaDownloadQueue = mediaDownloadQueue;
         _logger = logger;
     }
 
@@ -269,6 +273,31 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
 
         await uow.CommitAsync(cancellationToken);
         _telemetry.RecordOutcome(CaptureObservability.Stage.Persist, CaptureObservability.Status.Success);
+
+        // Queue async media binary download (best-effort; never fails the capture).
+        if (state.PersistedMedia is { } pendingMedia)
+        {
+            try
+            {
+                await _mediaDownloadQueue.EnqueueAsync(
+                    new MediaDownloadJob(
+                        principal.TenantId,
+                        principal.ContextId,
+                        pendingMedia.MessageId,
+                        pendingMedia.MediaId,
+                        pendingMedia.ProviderMediaId,
+                        pendingMedia.ContentType),
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "Failed to enqueue media download. media_id={MediaId} correlation_id={CorrelationId}",
+                    pendingMedia.MediaId,
+                    state.CorrelationId);
+            }
+        }
 
         var kind = state.IsUnsupported ? CaptureOutcomeKind.AcceptedUnsupported : CaptureOutcomeKind.Accepted;
         var auditEvent = state.IsUnsupported ? CaptureAuditEvent.UnsupportedPayload : CaptureAuditEvent.Accepted;

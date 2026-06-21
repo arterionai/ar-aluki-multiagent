@@ -3,6 +3,7 @@ using Aluki.Runtime.Abstractions.Persistence;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Abstractions.Skills;
 using Aluki.Runtime.Capture.Configuration;
+using Aluki.Runtime.Capture.Media;
 using Aluki.Runtime.Capture.Observability;
 using Aluki.Runtime.Capture.Retry;
 using Aluki.Runtime.Capture.Skills;
@@ -37,6 +38,10 @@ public static class CaptureServiceCollectionExtensions
         // Observability + reliability
         services.AddSingleton<CaptureTelemetry>();
         services.AddSingleton<CaptureRetryPolicy>();
+
+        // Async media download: default to a no-op queue; hosts that process media
+        // (the Functions deployment) override IMediaDownloadQueue with a real queue.
+        services.AddSingleton<IMediaDownloadQueue, NullMediaDownloadQueue>();
 
         // Capture skills (concrete + exposed via ISkill for the dispatcher)
         services.AddSingleton<ScopeGuardSkill>();
