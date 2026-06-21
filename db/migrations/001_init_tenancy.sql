@@ -1,7 +1,8 @@
 -- 001_init_tenancy.sql
 -- Baseline identity, tenancy, membership, and context model.
 
-create extension if not exists pgcrypto;
+-- Note: gen_random_uuid() is built into PostgreSQL core since v13, so no
+-- extension is required (pgcrypto is not allow-listed on the Azure baseline).
 
 create table if not exists tenants (
     id uuid primary key default gen_random_uuid(),

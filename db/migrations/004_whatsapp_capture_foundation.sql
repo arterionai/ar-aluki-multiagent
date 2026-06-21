@@ -4,8 +4,7 @@
 --
 -- Canonical idempotency key: (tenant_id, source_channel, provider_message_id).
 -- All tables carry tenant/context scope columns; RLS is enabled in 005.
-
-create extension if not exists pgcrypto;
+-- gen_random_uuid() is a PostgreSQL core function (v13+); no extension required.
 
 -- Raw provider envelope metadata for traceable capture intake.
 create table if not exists inbound_message_event (
