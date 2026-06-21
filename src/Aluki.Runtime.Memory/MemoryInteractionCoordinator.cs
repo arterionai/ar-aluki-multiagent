@@ -63,7 +63,7 @@ public sealed class MemoryInteractionCoordinator
             return ScopeDenied(correlationId, "Principal is not authorized for the requested scope.");
         }
 
-        var intent = _classifier.Classify(request.InputText);
+        var intent = await _classifier.ClassifyAsync(request.InputText, cancellationToken);
         if (intent == MemoryIntent.RecallQuery)
         {
             // US2 grounded recall is implemented in a follow-up; fail closed with
