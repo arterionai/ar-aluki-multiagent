@@ -1,4 +1,5 @@
 using Aluki.Runtime.Capture.Persistence;
+using Aluki.Runtime.Memory.Chat;
 using Aluki.Runtime.Memory.Embeddings;
 using Aluki.Runtime.Memory.Persistence;
 using Aluki.Runtime.Memory.Security;
@@ -18,6 +19,7 @@ public static class MemoryServiceCollectionExtensions
         services.TryAddSingleton<NpgsqlConnectionFactory>();
 
         services.AddSingleton<IEmbeddingClient, AzureOpenAIEmbeddingClient>();
+        services.AddSingleton<IChatModelRouter, FoundryChatModelRouter>();
         services.AddSingleton<MemoryIntentClassifierSkill>();
         services.AddSingleton<MemoryScopeGuard>();
         services.AddSingleton<MemoryStore>();
