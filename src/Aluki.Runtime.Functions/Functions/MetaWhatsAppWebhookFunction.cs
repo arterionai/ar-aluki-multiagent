@@ -8,8 +8,8 @@ namespace Aluki.Runtime.Functions.Functions;
 
 public sealed class MetaWhatsAppWebhookFunction
 {
-    private const string VerifyTokenSetting = "WHATSAPP_META_VERIFY_TOKEN";
-    private const string AppSecretSetting = "WHATSAPP_META_APP_SECRET";
+    private const string VerifyTokenSetting = "Meta__VerifyToken";
+    private const string AppSecretSetting = "Meta__AppSecret";
     private const string SignatureHeader = "x-hub-signature-256";
 
     [Function("MetaWhatsAppWebhookVerify")]
