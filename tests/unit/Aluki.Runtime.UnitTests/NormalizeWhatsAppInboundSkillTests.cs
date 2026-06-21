@@ -44,6 +44,23 @@ public sealed class NormalizeWhatsAppInboundSkillTests
     }
 
     [Fact]
+    public async Task Normalizes_document_as_supported_media()
+    {
+        var state = new CapturePipelineState(
+            CaptureTestData.Principal(),
+            CaptureTestData.MediaEnvelope("document"),
+            "corr-1");
+
+        await _skill.ExecuteAsync(CaptureTestData.Context(state), CancellationToken.None);
+
+        Assert.True(state.Normalized!.IsSupported);
+        Assert.Equal(CapturePayloadType.Document, state.Normalized.MessageKind);
+        Assert.NotNull(state.Normalized.Media);
+        Assert.Equal("document", state.Normalized.Media!.MediaType);
+        Assert.False(state.IsUnsupported);
+    }
+
+    [Fact]
     public async Task Flags_unsupported_payload()
     {
         var state = new CapturePipelineState(

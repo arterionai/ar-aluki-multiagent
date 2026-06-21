@@ -103,6 +103,12 @@ public static class MetaWebhookMapper
                 media = MapMedia(message, rawType, "audio");
                 break;
 
+            case "document":
+                payloadType = CapturePayloadType.Document;
+                media = MapMedia(message, "document", "document");
+                text = message.TryGetProperty("document", out var d) ? GetString(d, "caption") : null;
+                break;
+
             default:
                 // document, video, sticker, location, contacts, interactive, button, system, etc.
                 payloadType = CapturePayloadType.Unsupported;
