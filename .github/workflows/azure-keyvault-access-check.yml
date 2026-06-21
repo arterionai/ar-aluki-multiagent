@@ -34,6 +34,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          az keyvault show --name "$KEYVAULT_NAME" --query "name" --output tsv
+          az account show --query "{subscriptionId:id, tenantId:tenantId}" --output json
           az keyvault secret show --vault-name "$KEYVAULT_NAME" --name "$PROBE_SECRET_NAME" --query "id" --output tsv
           echo "Key Vault access check passed"
