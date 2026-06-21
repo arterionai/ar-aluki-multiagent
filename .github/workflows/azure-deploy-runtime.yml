@@ -85,11 +85,18 @@ jobs:
       - name: Publish Function project
         run: dotnet publish src/Aluki.Runtime.Functions/Aluki.Runtime.Functions.csproj --configuration Release --output publish
 
+      - name: Package Function App
+        shell: bash
+        run: |
+          cd publish
+          zip -r ../function-app.zip .
+          cd ..
+
       - name: Deploy to Azure Function App
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ env.FUNCTION_APP_NAME }}
-          package: publish
+          package: function-app.zip
 
   no-function-project-note:
     needs: build-and-validate-infra
