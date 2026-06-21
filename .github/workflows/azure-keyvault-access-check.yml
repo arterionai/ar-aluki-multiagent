@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - 001-whatsapp-capture
   pull_request:
 
 permissions:
