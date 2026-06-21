@@ -1,9 +1,11 @@
+using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Abstractions.Orchestration;
 using Aluki.Runtime.Abstractions.Persistence;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Abstractions.Skills;
 using Aluki.Runtime.Capture.Configuration;
 using Aluki.Runtime.Capture.Media;
+using Aluki.Runtime.Capture.Memory;
 using Aluki.Runtime.Capture.Observability;
 using Aluki.Runtime.Capture.Retry;
 using Aluki.Runtime.Capture.Skills;
@@ -11,6 +13,7 @@ using Aluki.Runtime.Capture.Persistence;
 using Aluki.Runtime.Capture.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aluki.Runtime.Capture;
 
@@ -42,6 +45,10 @@ public static class CaptureServiceCollectionExtensions
         // Async media download: default to a no-op queue; hosts that process media
         // (the Functions deployment) override IMediaDownloadQueue with a real queue.
         services.AddSingleton<IMediaDownloadQueue, NullMediaDownloadQueue>();
+
+        // Capture→memory bridge: default to a no-op sink. AddPersonalMemory replaces
+        // it with the real sink so captured messages become recall-able.
+        services.TryAddSingleton<IMemoryIngestionSink, NoOpMemoryIngestionSink>();
 
         // Capture skills (concrete + exposed via ISkill for the dispatcher)
         services.AddSingleton<ScopeGuardSkill>();

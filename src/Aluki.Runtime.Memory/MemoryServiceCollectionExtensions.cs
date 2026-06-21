@@ -1,7 +1,9 @@
+using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Capture.Persistence;
 using Aluki.Runtime.Memory.Chat;
 using Aluki.Runtime.Memory.Configuration;
 using Aluki.Runtime.Memory.Embeddings;
+using Aluki.Runtime.Memory.Ingestion;
 using Aluki.Runtime.Memory.Recall;
 using Aluki.Runtime.Memory.Persistence;
 using Aluki.Runtime.Memory.Security;
@@ -29,6 +31,10 @@ public static class MemoryServiceCollectionExtensions
         services.AddSingleton<MemoryRecallResponseAssembler>();
         services.AddSingleton<MemoryRecallService>();
         services.AddSingleton<MemoryInteractionCoordinator>();
+
+        // Replace the capture pipeline's no-op bridge with the real sink so captured
+        // WhatsApp messages are promoted into recall-able personal memory.
+        services.Replace(ServiceDescriptor.Singleton<IMemoryIngestionSink, MemoryIngestionSink>());
 
         services.Configure<MemoryOptions>(configuration.GetSection(MemoryOptions.SectionName));
 
