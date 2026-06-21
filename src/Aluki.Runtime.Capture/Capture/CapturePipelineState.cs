@@ -48,7 +48,13 @@ public sealed class CapturePipelineState
     public Guid? CanonicalMessageId { get; set; }
 
     public int AttemptNumber { get; set; }
+
+    /// <summary>Set when a downloadable media artifact was persisted this capture.</summary>
+    public PersistedMediaInfo? PersistedMedia { get; set; }
 }
+
+/// <summary>Identifies a persisted media artifact whose binary should be fetched asynchronously.</summary>
+public sealed record PersistedMediaInfo(Guid MediaId, Guid MessageId, string ProviderMediaId, string ContentType);
 
 /// <summary>Well-known <c>SkillExecutionContext.Input</c> keys for the capture pipeline.</summary>
 public static class CaptureInputKeys

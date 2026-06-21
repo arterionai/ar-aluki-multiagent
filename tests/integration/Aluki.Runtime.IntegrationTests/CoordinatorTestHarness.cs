@@ -1,6 +1,7 @@
 using Aluki.Runtime.Abstractions.Channels.WhatsApp;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Capture;
+using Aluki.Runtime.Capture.Media;
 using Aluki.Runtime.Capture.Retry;
 using Aluki.Runtime.Capture.Skills;
 using Aluki.Runtime.Capture.Configuration;
@@ -64,6 +65,7 @@ internal static class CoordinatorTestHarness
             new WriteCaptureAuditSkill(),
             writeScopeDenied,
             writeRetry,
+            new NullMediaDownloadQueue(),
             NullLogger<WhatsAppCaptureCoordinator>.Instance);
     }
 }
