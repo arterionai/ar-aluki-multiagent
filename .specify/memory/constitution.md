@@ -37,6 +37,25 @@ Default model routing prioritizes value models and escalates only when needed.
 Every significant skill execution emits telemetry (latency, cost, result, errors).
 Operational decisions require observable evidence, not intuition.
 
+### VI. Azure Deployment Baseline and LTS Runtime (Non-Negotiable)
+All deployable runtime artifacts must target the agreed Azure baseline resources.
+Do not create parallel ad hoc infrastructure for normal development flows.
+
+Baseline deployment targets:
+- Subscription: 33bbf1e1-134d-42e3-a370-0dfb1da16cff
+- Resource group: ar-Aluki
+- Function App deploy target: func-araluki-dev-7302
+- App Service plan: WestUS3Plan
+- Key Vault: kvaralukidev6155
+- PostgreSQL: pg-araluki-dev-6155
+- Storage: staralukidev6155
+- Application Insights: appi-araluki-dev
+
+Runtime/version policy:
+- CI/CD and cloud runtime defaults must use .NET 10 LTS unless an explicit approved exception exists.
+- New cloud functions must be implemented in the isolated worker model.
+- Deployments must authenticate through OIDC with managed identity and Key Vault-based secret resolution.
+
 ## Architecture and Delivery Constraints
 
 1. Runtime baseline
@@ -55,6 +74,11 @@ Operational decisions require observable evidence, not intuition.
 4. Performance and quality targets
 - P95 synchronous conversational response target: <= 2 seconds for non-blocking flows.
 - Extraction and OCR flows can be async but must provide explicit state transitions.
+
+5. Deployment discipline
+- Keep deployment automation in GitHub Actions as the canonical path.
+- Every deploy pipeline must validate target Function App state and Key Vault access before publishing artifacts.
+- Avoid embedding secrets in repository or pipeline scripts.
 
 ## Workflow and Quality Gates
 
@@ -88,4 +112,4 @@ Compliance policy:
 1. Every PR must include a short constitution compliance checklist.
 2. Missing compliance evidence blocks merge.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-21 | **Last Amended**: 2026-06-21
+**Version**: 1.1.0 | **Ratified**: 2026-06-21 | **Last Amended**: 2026-06-21
