@@ -1,5 +1,5 @@
-using Aluki.Runtime.Host.Capture.Retry;
-using Aluki.Runtime.Host.Configuration;
+using Aluki.Runtime.Capture.Retry;
+using Aluki.Runtime.Capture.Configuration;
 using Microsoft.Extensions.Options;
 using Xunit;
 

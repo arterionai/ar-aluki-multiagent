@@ -1,5 +1,5 @@
 using Aluki.Runtime.Abstractions.Channels.WhatsApp;
-using Aluki.Runtime.Host.Capture.Failure;
+using Aluki.Runtime.Capture.Failure;
 using Xunit;
 
 namespace Aluki.Runtime.UnitTests;

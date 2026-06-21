@@ -1,7 +1,7 @@
 using Aluki.Runtime.Abstractions.Channels.WhatsApp;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Abstractions.Skills;
-using Aluki.Runtime.Host.Capture;
+using Aluki.Runtime.Capture;
 
 namespace Aluki.Runtime.UnitTests;
 

@@ -1,12 +1,11 @@
-using Aluki.Runtime.Functions.Channels.WhatsApp;
-using Microsoft.Extensions.DependencyInjection;
+using Aluki.Runtime.Capture;
 using Microsoft.Extensions.Hosting;
 
 var host = new HostBuilder()
     .ConfigureFunctionsWorkerDefaults()
-    .ConfigureServices(services =>
+    .ConfigureServices((context, services) =>
     {
-        services.AddSingleton<InMemoryCaptureStore>();
+        services.AddWhatsAppCapture(context.Configuration);
     })
     .Build();
 

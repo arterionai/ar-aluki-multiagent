@@ -4,10 +4,24 @@ Operational guide for the WhatsApp capture foundation (spec 001). Covers
 mandatory audit events, correlation usage, retry/terminal handling, and the
 telemetry that backs the capture SLOs.
 
+## 0. Where the pipeline runs
+
+The capture pipeline lives in the shared library `src/Aluki.Runtime.Capture`
+(skills, persistence, security, retry, telemetry — no web dependency). Two hosts
+consume it via `AddWhatsAppCapture(configuration)`:
+
+- **`Aluki.Runtime.Functions`** (Azure Functions, isolated worker) — the
+  **deployed** ingress. The `azure-deploy-runtime.yml` workflow publishes this
+  project to the Function App (`func-araluki-dev-6155`) on push to `main`.
+- **`Aluki.Runtime.Host`** (ASP.NET Core) — local/dev ingress and the host for
+  integration/contract tests.
+
+Both expose the same route and dispatch the same `WhatsAppCaptureCoordinator`.
+
 ## 1. Ingress
 
-- Endpoint: `POST /api/channels/whatsapp/inbound`
-- Health: `GET /health`
+- Endpoint: `POST /api/channels/whatsapp/inbound` (Function auth level: Function key)
+- Health: `GET /api/health` (Functions) / `GET /health` (Host)
 - Request/response contract: `specs/001-whatsapp-capture/contracts/whatsapp-inbound-contract.yaml`
 - Outcomes:
   - `202` with `CaptureAck` — `accepted`, `duplicate_suppressed`, `accepted_unsupported`

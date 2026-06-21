@@ -1,10 +1,10 @@
 using Aluki.Runtime.Abstractions.Channels.WhatsApp;
 using Aluki.Runtime.Abstractions.Security;
-using Aluki.Runtime.Host.Capture;
-using Aluki.Runtime.Host.Capture.Retry;
-using Aluki.Runtime.Host.Capture.Skills;
-using Aluki.Runtime.Host.Configuration;
-using Aluki.Runtime.Host.Observability;
+using Aluki.Runtime.Capture;
+using Aluki.Runtime.Capture.Retry;
+using Aluki.Runtime.Capture.Skills;
+using Aluki.Runtime.Capture.Configuration;
+using Aluki.Runtime.Capture.Observability;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 

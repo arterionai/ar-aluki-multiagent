@@ -1,6 +1,6 @@
 using Aluki.Runtime.Abstractions.Channels.WhatsApp;
-using Aluki.Runtime.Host.Capture;
-using Aluki.Runtime.Host.Capture.Failure;
+using Aluki.Runtime.Capture;
+using Aluki.Runtime.Capture.Failure;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;

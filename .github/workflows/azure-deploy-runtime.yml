@@ -37,6 +37,13 @@ jobs:
       - name: Build
         run: dotnet build Aluki.Runtime.slnx --configuration Release --no-restore
 
+      - name: Test (unit + contract)
+        run: >-
+          dotnet test Aluki.Runtime.slnx
+          --configuration Release
+          --no-build
+          --filter "Category=Unit|Category=Contract"
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
