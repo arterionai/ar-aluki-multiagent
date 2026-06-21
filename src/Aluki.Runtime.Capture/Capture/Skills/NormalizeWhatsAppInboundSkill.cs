@@ -30,7 +30,7 @@ public sealed class NormalizeWhatsAppInboundSkill : CaptureSkill
             : payload.RawEnvelopeRef!;
 
         NormalizedMedia? media = null;
-        if (isSupported && type is CapturePayloadType.Image or CapturePayloadType.Audio)
+        if (isSupported && CapturePayloadType.IsMedia(type))
         {
             var source = payload.Media;
             media = new NormalizedMedia(
@@ -49,7 +49,9 @@ public sealed class NormalizeWhatsAppInboundSkill : CaptureSkill
             SenderExternalId: envelope.Sender.ExternalUserId,
             MessageKind: messageKind,
             IsSupported: isSupported,
-            MessageText: type is CapturePayloadType.Text or CapturePayloadType.Forwarded ? payload.Text : null,
+            MessageText: type is CapturePayloadType.Text or CapturePayloadType.Forwarded or CapturePayloadType.Document
+                ? payload.Text
+                : null,
             ForwardedFromRef: type == CapturePayloadType.Forwarded ? payload.Forwarded?.OriginalSenderRef : null,
             Media: media,
             RawEnvelopeRef: rawEnvelopeRef,
@@ -62,6 +64,6 @@ public sealed class NormalizeWhatsAppInboundSkill : CaptureSkill
     private static string NormalizeMediaType(string? declared, string payloadType)
     {
         var value = (declared ?? string.Empty).Trim().ToLowerInvariant();
-        return value is CapturePayloadType.Image or CapturePayloadType.Audio ? value : payloadType;
+        return CapturePayloadType.IsMedia(value) ? value : payloadType;
     }
 }

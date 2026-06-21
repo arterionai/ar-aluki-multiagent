@@ -88,11 +88,27 @@ public sealed class MetaWebhookMapperTests
     }
 
     [Fact]
-    public void Maps_unsupported_type()
+    public void Maps_document_message_to_media_metadata()
     {
         var json = Envelope("""
             {"from":"5215555555555","id":"wamid.doc","timestamp":"1690000004","type":"document",
-             "document":{"id":"D1","mime_type":"application/pdf"}}
+             "document":{"id":"D1","mime_type":"application/pdf","filename":"file.pdf","caption":"report"}}
+            """);
+
+        var e = Assert.Single(MetaWebhookMapper.Map(json));
+        Assert.Equal(CapturePayloadType.Document, e.Payload.Type);
+        Assert.Equal("document", e.Payload.Media!.MediaType);
+        Assert.Equal("application/pdf", e.Payload.Media.ContentType);
+        Assert.Equal("D1", e.Payload.Media.ProviderMediaId);
+        Assert.Equal("report", e.Payload.Text); // caption
+    }
+
+    [Fact]
+    public void Maps_unsupported_type()
+    {
+        var json = Envelope("""
+            {"from":"5215555555555","id":"wamid.stk","timestamp":"1690000004","type":"sticker",
+             "sticker":{"id":"S1","mime_type":"image/webp"}}
             """);
 
         var e = Assert.Single(MetaWebhookMapper.Map(json));
