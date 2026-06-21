@@ -1,0 +1,332 @@
+openapi: 3.0.3
+info:
+  title: Suggestions Admin and Rewards Contract
+  version: 1.0.0
+  description: >-
+    Contract for admin triage operations, reward decision execution,
+    immutable audit retrieval, and notification delivery retry state.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Role:
+      type: string
+      enum: [AdminReviewer, AdminApprover, AdminAuditor]
+    SuggestionStatus:
+      type: string
+      enum: [captured, under_review, accepted, rejected, archived]
+    RewardRuleType:
+      type: string
+      enum: [base, quality, streak]
+    NotificationState:
+      type: string
+      enum: [pending, retrying, delivered, dead_letter]
+
+    RewardIdempotencyBoundary:
+      type: object
+      required:
+        - tenant_id
+        - submitter_user_id
+        - suggestion_id
+        - reward_rule_type
+        - source_event_id
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        submitter_user_id:
+          type: string
+        suggestion_id:
+          type: string
+          format: uuid
+        reward_rule_type:
+          $ref: '#/components/schemas/RewardRuleType'
+        source_event_id:
+          type: string
+
+    RewardDecisionRequest:
+      type: object
+      required:
+        - boundary
+        - policy_version
+        - grant_amount
+        - rule_metadata
+      properties:
+        boundary:
+          $ref: '#/components/schemas/RewardIdempotencyBoundary'
+        policy_version:
+          type: string
+        grant_amount:
+          type: number
+          format: double
+        rule_metadata:
+          type: object
+          additionalProperties: true
+
+    RewardDecisionResponse:
+      type: object
+      required:
+        - decision
+        - decision_id
+      properties:
+        decision:
+          type: string
+          enum: [granted, skipped, rejected, duplicate, conflict]
+        decision_id:
+          type: string
+          format: uuid
+        entitlement_id:
+          type: string
+          format: uuid
+          nullable: true
+        reason_code:
+          type: string
+        telemetry_correlation_id:
+          type: string
+
+    StatusTransitionRequest:
+      type: object
+      required: [from_status, to_status, reason_code]
+      properties:
+        from_status:
+          $ref: '#/components/schemas/SuggestionStatus'
+        to_status:
+          $ref: '#/components/schemas/SuggestionStatus'
+        reason_code:
+          type: string
+
+    ClassificationUpdateRequest:
+      type: object
+      required: [category, priority, reason_code]
+      properties:
+        category:
+          type: string
+        priority:
+          type: string
+        reason_code:
+          type: string
+
+    AuditRecord:
+      type: object
+      required:
+        - audit_id
+        - tenant_id
+        - suggestion_id
+        - actor_user_id
+        - action_type
+        - created_at
+      properties:
+        audit_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        suggestion_id:
+          type: string
+          format: uuid
+        actor_user_id:
+          type: string
+        action_type:
+          type: string
+        old_value:
+          type: object
+          nullable: true
+          additionalProperties: true
+        new_value:
+          type: object
+          nullable: true
+          additionalProperties: true
+        reason_code:
+          type: string
+        immutable_sequence_no:
+          type: integer
+          format: int64
+        correction_of_audit_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+paths:
+  /admin/suggestions:
+    get:
+      summary: List triage queue with deterministic pagination and sorting
+      description: Requires AdminReviewer, AdminApprover, or AdminAuditor role.
+      parameters:
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/SuggestionStatus'
+        - in: query
+          name: category
+          schema:
+            type: string
+        - in: query
+          name: priority
+          schema:
+            type: string
+        - in: query
+          name: date_from
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: date_to
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: search
+          schema:
+            type: string
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+        - in: query
+          name: sort
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Queue page result
+        '401':
+          description: Unauthenticated
+        '403':
+          description: Forbidden
+
+  /admin/suggestions/{suggestionId}/status:
+    post:
+      summary: Execute controlled status transition
+      description: Reviewer can do captured->under_review; Approver can execute final transitions.
+      parameters:
+        - in: path
+          name: suggestionId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatusTransitionRequest'
+      responses:
+        '200':
+          description: Transition applied and audited
+        '409':
+          description: Invalid transition
+        '403':
+          description: Forbidden for role
+
+  /admin/suggestions/{suggestionId}/classification:
+    post:
+      summary: Update category and priority
+      description: Requires AdminReviewer or AdminApprover.
+      parameters:
+        - in: path
+          name: suggestionId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassificationUpdateRequest'
+      responses:
+        '200':
+          description: Classification updated and audited
+        '403':
+          description: Forbidden
+
+  /admin/rewards/decide:
+    post:
+      summary: Evaluate and persist reward decision with strict idempotency
+      description: >-
+        Applies idempotency boundary tuple and returns deterministic decision.
+        Payload mismatch on same boundary returns conflict.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RewardDecisionRequest'
+      responses:
+        '200':
+          description: Decision result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RewardDecisionResponse'
+        '409':
+          description: Conflict decision
+
+  /admin/suggestions/{suggestionId}/audit:
+    get:
+      summary: Read immutable audit records for a suggestion
+      description: Requires AdminAuditor, AdminReviewer, or AdminApprover role.
+      parameters:
+        - in: path
+          name: suggestionId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Audit entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditRecord'
+
+  /admin/rewards/notifications/{entitlementId}:
+    get:
+      summary: Read notification delivery and retry/dead-letter state
+      parameters:
+        - in: path
+          name: entitlementId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Notification delivery state
+
+x-retry-policy:
+  notification_delivery:
+    attempts: 5
+    schedule_minutes: [1, 5, 15, 60, 360]
+    terminal_state: dead_letter
+    replay: operator_explicit_only
+
+x-immutability-policy:
+  append_only_tables:
+    - suggestion_admin_audit_ledger
+    - reward_entitlement_ledger
+  correction_mode: compensating_records_only

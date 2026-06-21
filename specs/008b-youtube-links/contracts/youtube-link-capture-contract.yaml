@@ -1,0 +1,208 @@
+openapi: 3.0.3
+info:
+  title: YouTube Link Capture Contract
+  version: 1.0.0
+  description: |
+    Contract for tenant-scoped YouTube link detection, canonicalization, fallback enrichment,
+    idempotent persistence, and confidence-visible user outcomes.
+
+paths:
+  /api/v1/skills/youtube-links/capture:
+    post:
+      summary: Capture and classify YouTube links from one inbound message
+      operationId: captureYoutubeLinks
+      tags: [YouTubeLinks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureYoutubeLinksRequest'
+      responses:
+        '200':
+          description: Processed with per-link outcomes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureYoutubeLinksResponse'
+        '400':
+          description: Invalid request or missing context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized principal context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Tenant scope not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    CaptureYoutubeLinksRequest:
+      type: object
+      required:
+        - tenantId
+        - contextId
+        - principalId
+        - messageId
+        - messageText
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        contextId:
+          type: string
+          format: uuid
+        principalId:
+          type: string
+          minLength: 1
+        messageId:
+          type: string
+          minLength: 1
+        messageText:
+          type: string
+          minLength: 1
+        configuredProviders:
+          type: object
+          description: Provider selection and order for enrichment.
+          required: [primary, secondary]
+          properties:
+            primary:
+              type: string
+              minLength: 1
+            secondary:
+              type: string
+              minLength: 1
+
+    CaptureYoutubeLinksResponse:
+      type: object
+      required:
+        - messageId
+        - processedAt
+        - outcomes
+      properties:
+        messageId:
+          type: string
+        processedAt:
+          type: string
+          format: date-time
+        outcomes:
+          type: array
+          items:
+            $ref: '#/components/schemas/LinkOutcome'
+
+    LinkOutcome:
+      type: object
+      required:
+        - sourceUrl
+        - outcome
+        - persisted
+        - confidenceLabel
+      properties:
+        sourceUrl:
+          type: string
+        canonicalVideoId:
+          type: string
+          nullable: true
+        canonicalUrl:
+          type: string
+          nullable: true
+        outcome:
+          type: string
+          enum: [enriched, partial, degraded, invalid_link]
+        persisted:
+          type: boolean
+        persistenceAction:
+          type: string
+          description: created, refreshed, or none
+          enum: [created, refreshed, none]
+        enrichment:
+          $ref: '#/components/schemas/EnrichmentPayload'
+        classification:
+          $ref: '#/components/schemas/ClassificationPayload'
+        confidenceLabel:
+          type: string
+          enum: [high, medium, low]
+        userMessage:
+          type: string
+        auditEventIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    EnrichmentPayload:
+      type: object
+      nullable: true
+      properties:
+        providerUsed:
+          type: string
+          enum: [primary, secondary, none]
+        title:
+          type: string
+          nullable: true
+        descriptionSnippet:
+          type: string
+          nullable: true
+        channelName:
+          type: string
+          nullable: true
+        publishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        metadataCompleteness:
+          type: string
+          enum: [full, partial, none]
+
+    ClassificationPayload:
+      type: object
+      nullable: true
+      required: [confidenceLabel]
+      properties:
+        category:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        summary:
+          type: string
+          nullable: true
+        confidenceLabel:
+          type: string
+          enum: [high, medium, low]
+        uncertainFields:
+          type: array
+          description: Field names explicitly marked uncertain under low confidence.
+          items:
+            type: string
+            enum: [category, tags, summary]
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+
+x-behavioral-rules:
+  - rule: provider_fallback_order
+    description: Enrichment MUST run in deterministic order primary -> secondary -> degraded.
+  - rule: unsupported_url_behavior
+    description: Unsupported or malformed YouTube URL MUST result in invalid_link outcome, no persistence, and audit event.
+  - rule: duplicate_handling
+    description: Same canonicalVideoId is processed once per message; repeated same-tenant submissions refresh existing record.
+  - rule: confidence_visibility
+    description: Every user-facing outcome MUST include confidenceLabel and uncertainty indicators when confidence is low.

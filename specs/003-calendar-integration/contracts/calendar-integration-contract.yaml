@@ -1,0 +1,263 @@
+openapi: 3.0.3
+info:
+  title: Aluki Calendar Integration Contract
+  version: 0.1.0
+  description: Contract for calendar provider connection lifecycle and natural-language event creation.
+paths:
+  /api/calendar/interactions:
+    post:
+      summary: Process calendar interaction
+      operationId: processCalendarInteraction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CalendarInteractionRequest'
+      responses:
+        '200':
+          description: Successful interaction outcome
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalendarInteractionResponse'
+        '400':
+          description: Invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalendarError'
+        '403':
+          description: Scope denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalendarError'
+  /api/calendar/oauth/{provider}/callback:
+    get:
+      summary: Complete provider OAuth callback
+      operationId: processCalendarOAuthCallback
+      parameters:
+        - in: path
+          name: provider
+          required: true
+          schema:
+            type: string
+            enum: [outlook, google]
+        - in: query
+          name: code
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: state
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: error
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Callback accepted and processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthCallbackResponse'
+        '400':
+          description: Invalid, expired, replayed, or mismatched callback
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalendarError'
+components:
+  schemas:
+    CalendarInteractionRequest:
+      type: object
+      required:
+        - correlation_id
+        - source_channel
+        - interaction_type
+        - requested_at_utc
+        - principal
+      properties:
+        correlation_id:
+          type: string
+        source_channel:
+          type: string
+        interaction_type:
+          type: string
+          enum: [connect, disconnect, create_event]
+        provider:
+          type: string
+          nullable: true
+          enum: [outlook, google]
+        input_text:
+          type: string
+          nullable: true
+          minLength: 1
+          description: Required for create_event natural-language input.
+        principal:
+          $ref: '#/components/schemas/PrincipalScope'
+        requested_at_utc:
+          type: string
+          format: date-time
+    PrincipalScope:
+      type: object
+      required:
+        - tenant_id
+        - context_id
+        - user_id
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        context_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        roles:
+          type: array
+          items:
+            type: string
+    CalendarInteractionResponse:
+      type: object
+      required:
+        - correlation_id
+        - interaction_type
+        - status
+        - outcome_reference
+      properties:
+        correlation_id:
+          type: string
+        interaction_type:
+          type: string
+          enum: [connect, disconnect, create_event]
+        status:
+          type: string
+          enum:
+            - connect_required
+            - connection_established
+            - disconnected
+            - clarification_required
+            - created
+            - previously_created
+            - reconnect_required
+            - denied
+            - failed
+        outcome_reference:
+          type: string
+        provider:
+          type: string
+          nullable: true
+          enum: [outlook, google]
+        provider_event_reference:
+          type: string
+          nullable: true
+        selected_provider_reason:
+          type: string
+          nullable: true
+          enum: [explicit_request, user_default, deterministic_tiebreak]
+        final_event:
+          $ref: '#/components/schemas/FinalEvent'
+        clarification:
+          $ref: '#/components/schemas/ClarificationPrompt'
+        reconnect:
+          $ref: '#/components/schemas/ReconnectGuidance'
+    FinalEvent:
+      type: object
+      required:
+        - title
+        - start_utc
+        - timezone
+      properties:
+        title:
+          type: string
+        start_utc:
+          type: string
+          format: date-time
+        end_utc:
+          type: string
+          format: date-time
+          nullable: true
+        timezone:
+          type: string
+        provider:
+          type: string
+          enum: [outlook, google]
+    ClarificationPrompt:
+      type: object
+      required:
+        - missing_fields
+        - question
+      properties:
+        missing_fields:
+          type: array
+          items:
+            type: string
+        question:
+          type: string
+        ambiguity_type:
+          type: string
+          nullable: true
+          enum: [missing_required_field, ambiguous_timezone, dst_ambiguous, dst_nonexistent]
+    ReconnectGuidance:
+      type: object
+      required:
+        - provider
+        - reason_code
+        - reconnect_url
+      properties:
+        provider:
+          type: string
+          enum: [outlook, google]
+        reason_code:
+          type: string
+          enum: [expired_token, invalid_grant, refresh_denied]
+        reconnect_url:
+          type: string
+          format: uri
+    OAuthCallbackResponse:
+      type: object
+      required:
+        - correlation_id
+        - provider
+        - status
+      properties:
+        correlation_id:
+          type: string
+        provider:
+          type: string
+          enum: [outlook, google]
+        status:
+          type: string
+          enum: [connection_established, callback_rejected]
+        reason_code:
+          type: string
+          nullable: true
+          enum: [expired_state, replayed_state, state_mismatch, provider_denied]
+    CalendarError:
+      type: object
+      required:
+        - correlation_id
+        - code
+        - message
+      properties:
+        correlation_id:
+          type: string
+        code:
+          type: string
+          enum:
+            - invalid_payload
+            - scope_denied
+            - provider_not_connected
+            - callback_invalid
+            - callback_expired
+            - callback_replayed
+            - callback_state_mismatch
+        message:
+          type: string

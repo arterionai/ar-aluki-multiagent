@@ -42,3 +42,17 @@ Given receipt image, when OCR runs, then vendor/amount/date/tax and RFC are extr
 - Audio under target duration returns structured response within defined SLA.
 - Uncertain or unreadable fragments are flagged, never invented.
 - Structured extraction output persists with provenance for future recall.
+
+## 7. Clarifications
+
+### Session 2026-06-21
+
+- Q: How is the language of incoming transcripts detected and handled? → A: Auto-detection with region fallback: system attempts language detection on audio/text; if inconclusive, defaults to user's configured region preference (es-MX primary, en-US secondary). Language is recorded in extraction metadata for recall filtering.
+
+- Q: What extraction confidence thresholds determine flagging or filtering? → A: Confidence scoring applied per extraction field (transcription, entity, decision, amount, date, RFC): **High** ≥0.85 (accepted as-is), **Medium** 0.70–0.84 (flagged for review), **Low** <0.70 (marked uncertain, not surfaced without user review). Confidence metadata persists with each extraction.
+
+- Q: How are mixed-language inputs (code-switching, bilingual transcripts) handled? → A: Segments are language-tagged during transcription; multilingual extractions process each language segment independently, then merge results with language-pair notation (e.g., "es-MX:en-US" for bilingual passages). System notes language switches in metadata.
+
+- Q: What is the OCR fallback behavior when primary receipt OCR fails? → A: Primary OCR attempt → if structured field extraction fails, secondary text-only OCR attempted → if both fail, fragment marked as "unreadable" with manual-review flag and raw image reference stored for later human verification. No invented data.
+
+- Q: How do users track async job lifecycle and status? → A: Job status endpoint returns state: **pending** (queued), **processing** (active), **completed_success** (all fields extracted), **completed_with_warnings** (partial success, Medium/Low confidence fields flagged), **failed** (unrecoverable error). Progress metadata includes segment count and completion %. Job ID persists across retries for idempotency.

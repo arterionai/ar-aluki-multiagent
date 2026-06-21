@@ -1,0 +1,365 @@
+apiVersion: v1
+kind: ReminderDeliveryContract
+metadata:
+  name: reminder-delivery-contract
+  version: "1.0.0"
+  description: |
+    Schema for reminder delivery payload exchanged between ReminderOrchestrator 
+    (Durable Functions) and delivery channel handlers (in-app notification, SMS, email).
+    Specifies idempotent delivery semantics and retry behavior.
+
+spec:
+  title: Reminder Delivery Contract
+  description: |
+    Defines the request and response payload for reminder delivery operations.
+    Used by DeliverReminderActivity in Durable Functions to invoke notification services.
+    
+  namespaces:
+    - name: reminder.delivery
+      prefix: rd
+  
+  # ============================================================================
+  # REQUEST: Reminder Delivery Request
+  # ============================================================================
+  request:
+    $id: "https://aluki.ai/schema/reminder/delivery-request#"
+    title: ReminderDeliveryRequest
+    description: |
+      Immutable request to deliver a reminder notification.
+      Idempotency guaranteed by (reminder_id, scheduled_time_utc, attempt_number).
+    
+    type: object
+    required:
+      - reminder_id
+      - tenant_id
+      - user_id
+      - context_id
+      - scheduled_time_utc
+      - attempt_number
+      - reminder_text
+      - delivery_channel
+      - correlation_id
+    
+    properties:
+      reminder_id:
+        type: string
+        format: uuid
+        description: |
+          Stable identifier for the reminder lifecycle.
+          Paired with scheduled_time_utc and attempt_number for idempotency.
+      
+      tenant_id:
+        type: string
+        format: uuid
+        description: Tenant scope (required for multi-tenancy isolation).
+      
+      user_id:
+        type: string
+        format: uuid
+        description: Recipient user ID (required for authorization).
+      
+      context_id:
+        type: string
+        format: uuid
+        description: User context (personal, team, etc.).
+      
+      scheduled_time_utc:
+        type: string
+        format: date-time
+        description: |
+          The fire time in UTC for this specific delivery event.
+          For recurring reminders, each occurrence has its own scheduled_time_utc.
+          Paired with reminder_id and attempt_number for idempotency.
+      
+      attempt_number:
+        type: integer
+        minimum: 1
+        maximum: 3
+        description: |
+          Attempt count (1 = initial delivery, 2-3 = retries).
+          Paired with reminder_id and scheduled_time_utc for idempotency.
+      
+      reminder_text:
+        type: string
+        minLength: 1
+        maxLength: 500
+        description: User-facing reminder message to display/send.
+      
+      delivery_channel:
+        type: string
+        enum: [in_app, sms, email]
+        default: in_app
+        description: |
+          Target delivery channel.
+          - in_app: In-application notification (push to Orleans session)
+          - sms: Short message service (future)
+          - email: Email (future)
+      
+      timezone:
+        type: string
+        description: |
+          IANA timezone identifier (e.g., "America/New_York").
+          Context for displaying reminder time in user's local time.
+      
+      snooze_options:
+        type: array
+        items:
+          type: object
+          properties:
+            duration_seconds:
+              type: integer
+              description: Snooze duration in seconds (e.g., 300 = 5 min).
+            label:
+              type: string
+              description: User-facing label (e.g., "5 minutes", "Next day").
+        description: |
+          Array of preset snooze durations available to user.
+          Examples: [300 (5 min), 900 (15 min), 1800 (30 min), 3600 (1 hour), 86400 (next day)]
+      
+      correlation_id:
+        type: string
+        description: |
+          Trace ID linking delivery attempt to parent request/workflow.
+          Used for distributed tracing and audit correlation.
+    
+    example:
+      reminder_id: "550e8400-e29b-41d4-a716-446655440000"
+      tenant_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+      user_id: "6ba7b811-9dad-11d1-80b4-00c04fd430c8"
+      context_id: "6ba7b812-9dad-11d1-80b4-00c04fd430c8"
+      scheduled_time_utc: "2026-06-25T14:30:00Z"
+      attempt_number: 1
+      reminder_text: "Team meeting at 3 PM"
+      delivery_channel: "in_app"
+      timezone: "America/New_York"
+      snooze_options:
+        - duration_seconds: 300
+          label: "5 minutes"
+        - duration_seconds: 900
+          label: "15 minutes"
+        - duration_seconds: 86400
+          label: "Next day"
+      correlation_id: "trace-12345-67890"
+  
+  # ============================================================================
+  # RESPONSE: Reminder Delivery Response
+  # ============================================================================
+  response:
+    $id: "https://aluki.ai/schema/reminder/delivery-response#"
+    title: ReminderDeliveryResponse
+    description: |
+      Outcome of a delivery attempt.
+      Indicates success, transient failure (retry), or permanent failure (terminal).
+    
+    type: object
+    required:
+      - reminder_id
+      - scheduled_time_utc
+      - attempt_number
+      - delivery_status
+    
+    properties:
+      reminder_id:
+        type: string
+        format: uuid
+        description: Echo of request reminder_id for correlation.
+      
+      scheduled_time_utc:
+        type: string
+        format: date-time
+        description: Echo of request scheduled_time_utc for idempotency verification.
+      
+      attempt_number:
+        type: integer
+        description: Echo of request attempt_number.
+      
+      delivery_status:
+        type: string
+        enum: [delivered, transient_failure, permanent_failure]
+        description: |
+          Outcome of delivery attempt:
+          - delivered: Successfully sent to user.
+          - transient_failure: Temporary issue (network, service unavailable); DF will retry.
+          - permanent_failure: Non-retryable issue (invalid recipient, rate limited, etc.); DF will mark terminal.
+      
+      notification_id:
+        type: string
+        nullable: true
+        description: |
+          Provider-generated ID (if status='delivered').
+          Examples: Firebase Messaging ID, SMS gateway message ID.
+      
+      delivery_timestamp_utc:
+        type: string
+        format: date-time
+        nullable: true
+        description: |
+          Timestamp of successful delivery (if status='delivered').
+          Recorded in reminder_delivery_attempts.delivered_at_utc.
+      
+      failure_category:
+        type: string
+        enum: [network_timeout, service_unavailable, invalid_recipient, rate_limited, unknown]
+        nullable: true
+        description: |
+          Classification of failure (if status in [transient_failure, permanent_failure]).
+          Used for metrics and troubleshooting.
+      
+      failure_message:
+        type: string
+        nullable: true
+        description: |
+          Human-readable error detail (if status in [transient_failure, permanent_failure]).
+          Examples: "Socket timeout after 30s", "SMS gateway rate limit exceeded".
+      
+      next_retry_time_utc:
+        type: string
+        format: date-time
+        nullable: true
+        description: |
+          Scheduled retry time (if status='transient_failure').
+          Exponential backoff: 5s, 25s, 125s from attempt_number.
+      
+      correlation_id:
+        type: string
+        description: Echo of request correlation_id for tracing.
+    
+    example:
+      reminder_id: "550e8400-e29b-41d4-a716-446655440000"
+      scheduled_time_utc: "2026-06-25T14:30:00Z"
+      attempt_number: 1
+      delivery_status: "delivered"
+      notification_id: "fcm-msg-id-abc123xyz"
+      delivery_timestamp_utc: "2026-06-25T14:30:02Z"
+      failure_category: null
+      failure_message: null
+      next_retry_time_utc: null
+      correlation_id: "trace-12345-67890"
+  
+  # ============================================================================
+  # DELIVERY SEMANTICS
+  # ============================================================================
+  semantics:
+    idempotency:
+      description: |
+        Delivery is idempotent using natural key (reminder_id, scheduled_time_utc, attempt_number).
+        If same request is received twice (e.g., on crash/retry), delivery channel MUST NOT 
+        send duplicate notifications. Implementation:
+        - Check if notification_id already exists for this key in reminder_delivery_attempts.
+        - If yes, return cached response.
+        - If no, send notification and persist notification_id before returning.
+      
+      idempotency_key: "reminder_id + scheduled_time_utc + attempt_number"
+    
+    retry_strategy:
+      description: |
+        Transient failures trigger automatic retries orchestrated by Durable Functions.
+        Retry timing: exponential backoff with jitter to avoid thundering herd.
+      
+      max_attempts: 3
+      backoff_schedule:
+        - attempt: 1
+          delay_seconds: 0
+          description: "Initial delivery attempt"
+        - attempt: 2
+          delay_seconds: 5
+          description: "First retry (5 seconds)"
+        - attempt: 3
+          delay_seconds: 25
+          description: "Second retry (25 seconds, 30 seconds total from first attempt)"
+        - attempt: 4
+          delay_seconds: 125
+          description: "Third retry (125 seconds, 155 seconds total from first attempt)"
+      
+      total_timeout_seconds: 155
+      description: |
+        Total time from initial fire to final terminal outcome: ~2.5 minutes.
+        If delivery_status='delivered' at any attempt, no further retries.
+        If all 3 attempts exhaust with transient_failure, mark reminder as delivery_failed.
+    
+    failure_handling:
+      transient:
+        description: |
+          Network timeouts, service unavailability (5xx), temporary rate limits.
+          Action: DF orchestrator schedules retry.
+        
+        categories: [network_timeout, service_unavailable, rate_limited]
+      
+      permanent:
+        description: |
+          Invalid recipient, authorization denied, unsupported delivery channel.
+          Action: DF orchestrator marks reminder delivery_failed and terminates.
+        
+        categories: [invalid_recipient]
+      
+      unknown:
+        description: |
+          Unexpected error (e.g., JSON parsing failure).
+          Action: DF orchestrator logs error and treats as transient (retries).
+        
+        categories: [unknown]
+    
+    quota_behavior:
+      description: |
+        If delivery_status='delivered' but user is over quota at delivery time,
+        reminder still fires and is marked as delivered. User sees quota warning in notification.
+        Future reminder creation requests are blocked until user reduces active count.
+
+---
+
+## Usage Example
+
+### Reminder Fire Orchestrator Flow
+
+```
+ReminderOrchestrator (Durable Functions)
+├─ Timer: Wait until scheduled_time_utc
+├─ Activity: DeliverReminderActivity(request)
+│  └─ Input: ReminderDeliveryRequest
+│  └─ Output: ReminderDeliveryResponse
+├─ Decision Tree:
+│  ├─ IF delivery_status='delivered'
+│  │  └─ Call CompleteReminderActivity
+│  │  └─ Set reminder.status='delivered'
+│  ├─ ELSE IF delivery_status='transient_failure' AND attempt_number < 3
+│  │  └─ Call ScheduleRetryActivity(next_retry_time_utc, attempt_number+1)
+│  │  └─ Activity will re-invoke DeliverReminderActivity at retry time
+│  ├─ ELSE IF delivery_status='permanent_failure' OR attempt_number >= 3
+│  │  └─ Call FailReminderActivity
+│  │  └─ Set reminder.status='delivery_failed'
+│  │  └─ Emit audit event
+│  └─ ELSE
+│     └─ Log unknown outcome
+└─ END
+```
+
+### Example Request (Python/C#)
+
+```csharp
+var deliveryRequest = new ReminderDeliveryRequest
+{
+    ReminderId = reminder.ReminderId,
+    TenantId = reminder.TenantId,
+    UserId = reminder.UserId,
+    ContextId = reminder.ContextId,
+    ScheduledTimeUtc = reminder.ScheduledTimeUtc,
+    AttemptNumber = attempt,
+    ReminderText = reminder.ReminderText,
+    DeliveryChannel = "in_app",
+    Timezone = reminder.Timezone,
+    SnoozeOptions = new[] {
+        new { DurationSeconds = 300, Label = "5 minutes" },
+        new { DurationSeconds = 900, Label = "15 minutes" },
+        new { DurationSeconds = 86400, Label = "Next day" }
+    },
+    CorrelationId = context.InstanceId
+};
+
+var deliveryResult = await orchestrationContext.CallActivityAsync<ReminderDeliveryResponse>(
+    nameof(DeliverReminderActivity),
+    deliveryRequest);
+```
+
+---
+
+**Contract Version**: 1.0.0 | **Last Updated**: 2026-06-21 | **Status**: Approved

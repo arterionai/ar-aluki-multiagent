@@ -1,0 +1,261 @@
+---
+# WhatsApp Inbound Suggestion Intent Contract
+# Version: 1.0
+# Date: 2026-06-21
+# Description: |
+#   Defines the inbound contract for WhatsApp-originated suggestion messages.
+#   Extends the existing 001-whatsapp-capture webhook payload with suggestion-specific routing.
+
+contract_type: inbound_webhook_routing
+feature: 007-feedback-suggestions
+extension_of: 001-whatsapp-capture
+endpoint: /api/v1/webhooks/whatsapp/inbound
+
+---
+
+## Request Contract
+
+### Inbound Webhook Payload (from 001-whatsapp-capture)
+
+```yaml
+POST /api/v1/webhooks/whatsapp/inbound
+Content-Type: application/json
+X-WhatsApp-Signature: <hmac-sha256>
+
+{
+  "tenant_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "message_id": "wamid.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "from_user_id": "1234567890",  # WhatsApp phone number
+  "message_type": "text" | "audio" | "image",
+  "timestamp": 1719015600,
+  "payload": {
+    # Variant 1: Text message
+    "text": "I think the app should support offline mode"
+    
+    # Variant 2: Audio message
+    # "audio_url": "https://example.blob.core.windows.net/audio/xxxxx.mp4",
+    # "audio_mime_type": "audio/mp4",
+    # "audio_size_bytes": 125000
+    
+    # Variant 3: Image message
+    # "image_url": "https://example.blob.core.windows.net/images/xxxxx.jpeg",
+    # "image_mime_type": "image/jpeg",
+    # "image_caption": "optional caption",
+    # "image_size_bytes": 50000
+  }
+}
+```
+
+### Suggestion Intent Detection (New)
+
+The inbound handler must identify suggestion intent using these heuristics:
+
+```yaml
+Suggestion Intent Signals:
+  - Keywords: ["suggest", "feature request", "I think", "should have", "would be great if", "consider adding", "feedback"]
+  - Tone: Constructive or forward-looking (not complaint/issue)
+  - Structure: Declarative statement or question with forward reference
+  - Exclusions: Questions asking for help (→ MemoryAgent), error reports (→ IssueAgent)
+
+Detection Confidence Thresholds:
+  - High confidence (≥0.8): Route to FeedbackAgent
+  - Medium confidence (0.5-0.8): Route to FeedbackAgent with confidence score in telemetry
+  - Low confidence (<0.5): Route to MemoryAgent (fallback to recall)
+```
+
+### Routing Decision
+
+```yaml
+if message_intent_is_suggestion(text, message_type):
+  route_to: FeedbackAgent
+  action: capture_suggestion
+else:
+  route_to: MemoryAgent
+  action: recall_or_store
+```
+
+---
+
+## Response Contract
+
+### Success Response (202 Accepted)
+
+```yaml
+HTTP 202 Accepted
+Content-Type: application/json
+
+{
+  "status": "accepted",
+  "message_id": "wamid.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "suggestion_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",  # NEW: Only if suggestion captured
+  "action": "suggestion_captured" | "memory_stored" | "recall_executed",
+  "idempotency_key": "wamid.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx:5min",
+  "timestamp": "2026-06-21T14:30:00Z"
+}
+```
+
+### Error Responses
+
+#### Duplicate Ingestion (Idempotent)
+```yaml
+HTTP 200 OK
+Content-Type: application/json
+
+{
+  "status": "ignored",
+  "message": "Duplicate message within idempotency window (5 minutes)",
+  "suggestion_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",  # Existing suggestion
+  "reason": "message_id + payload_hash composite key matched",
+  "timestamp": "2026-06-21T14:35:00Z"
+}
+```
+
+#### Validation Failures
+```yaml
+HTTP 400 Bad Request
+Content-Type: application/json
+
+{
+  "status": "error",
+  "code": "invalid_payload",
+  "message": "Audio file exceeds 50 MB limit",
+  "message_id": "wamid.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "timestamp": "2026-06-21T14:30:05Z"
+}
+```
+
+#### Server-Side Errors (Transient)
+```yaml
+HTTP 503 Service Unavailable
+Content-Type: application/json
+
+{
+  "status": "error",
+  "code": "suggestion_engine_unavailable",
+  "message": "FeedbackAgent temporarily unavailable; retry after 5 seconds",
+  "retry_after_seconds": 5,
+  "timestamp": "2026-06-21T14:30:10Z"
+}
+```
+
+---
+
+## Payload Validation Rules
+
+### Text Messages
+- **Max length**: 5 KB inline (larger stored in blob)
+- **Character encoding**: UTF-8 (WhatsApp enforced)
+- **Validation**: Non-empty string, min 10 characters for suggestion intent
+
+### Audio Messages
+- **Supported MIME types**: audio/mp4, audio/webm, audio/ogg
+- **Max file size**: 50 MB
+- **Duration limit**: 60 minutes
+- **Validation**: Must be downloadable from WhatsApp CDN within 5 minutes of webhook delivery
+
+### Image Messages
+- **Supported MIME types**: image/jpeg, image/png
+- **Max file size**: 10 MB
+- **Dimensions**: No constraint (handled by Azure Storage lifecycle)
+- **Caption**: Optional; if provided, included in suggestion context
+
+---
+
+## Idempotency & Deduplication
+
+### Composite Key Strategy
+```yaml
+Idempotency Key: SHA-256(message_id + payload_hash)
+Window: 5 minutes from first ingestion
+Tracking: In-memory cache (FeedbackAgent grain) + database dedupe lookup
+
+Duplicate Detection:
+  if (message_id, inbound_payload_hash) matches existing in last 5 minutes:
+    → return 200 OK with existing suggestion_id (no new artifact)
+  else:
+    → create new suggestion, return 202 Accepted
+```
+
+### Payload Hashing
+```yaml
+Text messages:
+  hash = SHA-256(message_type + text_content)
+
+Audio messages:
+  hash = SHA-256(message_type + audio_url + audio_size_bytes)
+  # Note: Uses URL + size, not full audio download (optimization)
+
+Image messages:
+  hash = SHA-256(message_type + image_url + image_size_bytes)
+  # Note: Caption not included in hash; caption changes don't trigger duplication
+```
+
+---
+
+## Integration Points
+
+### 001-whatsapp-capture (Upstream)
+- Inbound webhook is shared; routing logic added to existing handler
+- Suggestion detection runs post-validation of WhatsApp signature
+- No changes to webhook signature verification or tenant isolation
+
+### FeedbackAgent (Downstream)
+- Receives routing decision with message ID, tenant-user scope, payload
+- Responsible for context window management (30-min active window per user)
+- Emits state transitions to audit log
+
+### Memory Recall (002-personal-memory)
+- Suggestions excluded from recall query results after `captured` state
+- No active integration change; filtering is SQL-level (`WHERE artifact_type != 'suggestion'`)
+
+---
+
+## Telemetry Events
+
+All webhook events emit telemetry for observability:
+
+```yaml
+Event: suggestion_intent_detected
+  - message_id: string
+  - detected_confidence: float [0.0-1.0]
+  - intent_signal: string (keyword match reason)
+  - tenant_id: uuid
+  - user_id: uuid
+
+Event: suggestion_captured
+  - suggestion_id: uuid
+  - message_type: text | audio | image
+  - idempotency_key: string
+  - processing_time_ms: int
+
+Event: duplicate_ignored
+  - message_id: string
+  - existing_suggestion_id: uuid
+  - window_age_seconds: int
+
+Event: suggestion_attachment_linked
+  - suggestion_id: uuid
+  - attachment_type: text | audio | image
+  - file_size_bytes: int
+  - linked_at: timestamp
+  - context_window_remaining_seconds: int
+```
+
+---
+
+## Compliance & Audit
+
+### Data Retention
+- All webhook payloads logged to audit trail (with tenant-user scope)
+- Message IDs retained for 5-minute idempotency window
+- State transitions immutable (append-only audit log)
+
+### Encryption
+- HTTPS enforced for all webhook calls (TLS 1.2+)
+- Payloads encrypted at rest in PostgreSQL (TDE)
+- Blob storage encrypted at rest (Azure Storage Service Encryption)
+
+### Rate Limiting
+- Per-tenant-user: Max 50 suggestions per day
+- Per-webhook: Max 1000 messages/minute cluster-wide
+- Backpressure: Return 429 Too Many Requests if quota exceeded

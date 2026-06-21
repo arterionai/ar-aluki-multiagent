@@ -1,0 +1,356 @@
+openapi: 3.0.3
+info:
+  title: Delegated Reminder Contract
+  version: 1.0.0
+  description: Contract for delegated reminder creation, recipient resolution outcomes, consent gating, cancellation, and delivery result reporting.
+
+paths:
+  /runtime/delegated-reminders:
+    post:
+      summary: Create delegated reminder request
+      operationId: createDelegatedReminder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDelegatedReminderRequest'
+      responses:
+        '200':
+          description: Delegated reminder accepted or requires follow-up action
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateDelegatedReminderResponse'
+
+  /runtime/delegated-reminders/{delegatedReminderId}/cancel:
+    post:
+      summary: Cancel delegated reminder before cancellation deadline
+      operationId: cancelDelegatedReminder
+      parameters:
+        - name: delegatedReminderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelDelegatedReminderRequest'
+      responses:
+        '200':
+          description: Cancellation accepted or rejected with reason
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelDelegatedReminderResponse'
+        '409':
+          description: Ambiguous cancellation requires disambiguation
+
+  /runtime/delegated-reminders/query:
+    post:
+      summary: Query delegated reminders separately from personal reminders
+      operationId: queryDelegatedReminders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DelegatedReminderQueryRequest'
+      responses:
+        '200':
+          description: Delegated reminders list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DelegatedReminderQueryResponse'
+
+  /runtime/delegated-reminders/{delegatedReminderId}/delivery-result:
+    post:
+      summary: Report delivery attempt outcome for orchestration progression
+      operationId: reportDelegatedDeliveryResult
+      parameters:
+        - name: delegatedReminderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DelegatedDeliveryResultRequest'
+      responses:
+        '200':
+          description: Delivery result accepted
+
+components:
+  schemas:
+    PrincipalContext:
+      type: object
+      required:
+        - tenant_id
+        - principal_id
+      properties:
+        tenant_id:
+          type: string
+        principal_id:
+          type: string
+        sender_user_id:
+          type: string
+
+    RecipientResolutionInput:
+      type: object
+      required:
+        - recipient_identity_hint
+      properties:
+        recipient_identity_hint:
+          type: string
+        recipient_name:
+          type: string
+          nullable: true
+        phone_e164:
+          type: string
+          nullable: true
+        whatsapp_handle:
+          type: string
+          nullable: true
+
+    RecipientResolutionOutcome:
+      type: object
+      required:
+        - resolution_tier
+        - next_action
+      properties:
+        resolution_tier:
+          type: string
+          enum:
+            - tier1_known_contact_confirmed
+            - tier2_phone_only_needs_capture
+            - tier3_unknown_needs_clarification
+        next_action:
+          type: string
+          enum:
+            - proceed_to_policy_check
+            - request_contact_capture
+            - request_recipient_clarification
+        recipient_identity:
+          type: string
+          nullable: true
+
+    PolicyDecision:
+      type: object
+      required:
+        - decision
+        - reason_code
+      properties:
+        decision:
+          type: string
+          enum:
+            - allow
+            - deny
+            - needs_consent
+        reason_code:
+          type: string
+        rolling_window_count:
+          type: integer
+          nullable: true
+        rolling_window_limit:
+          type: integer
+          nullable: true
+
+    CreateDelegatedReminderRequest:
+      type: object
+      required:
+        - request_id
+        - principal_context
+        - due_time_utc
+        - content
+        - recipient
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        principal_context:
+          $ref: '#/components/schemas/PrincipalContext'
+        due_time_utc:
+          type: string
+          format: date-time
+        content:
+          type: string
+          minLength: 1
+          maxLength: 500
+        recipient:
+          $ref: '#/components/schemas/RecipientResolutionInput'
+        correlation_id:
+          type: string
+
+    CreateDelegatedReminderResponse:
+      type: object
+      required:
+        - request_id
+        - status
+        - recipient_resolution
+        - policy_decision
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        delegated_reminder_id:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          type: string
+          enum:
+            - scheduled
+            - awaiting_recipient_resolution
+            - awaiting_consent
+            - denied
+        recipient_resolution:
+          $ref: '#/components/schemas/RecipientResolutionOutcome'
+        policy_decision:
+          $ref: '#/components/schemas/PolicyDecision'
+        cancel_deadline_utc:
+          type: string
+          format: date-time
+          nullable: true
+
+    CancelDelegatedReminderRequest:
+      type: object
+      required:
+        - request_id
+        - principal_context
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        principal_context:
+          $ref: '#/components/schemas/PrincipalContext'
+        disambiguation_token:
+          type: string
+          nullable: true
+
+    CancelDelegatedReminderResponse:
+      type: object
+      required:
+        - request_id
+        - cancellation_result
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        cancellation_result:
+          type: string
+          enum:
+            - cancelled
+            - rejected_window_closed
+            - rejected_delivery_in_progress
+            - rejected_not_found
+            - ambiguous
+        reason_code:
+          type: string
+          nullable: true
+
+    DelegatedReminderQueryRequest:
+      type: object
+      required:
+        - principal_context
+      properties:
+        principal_context:
+          $ref: '#/components/schemas/PrincipalContext'
+        status:
+          type: string
+          nullable: true
+        recipient_identity:
+          type: string
+          nullable: true
+        due_from_utc:
+          type: string
+          format: date-time
+          nullable: true
+        due_to_utc:
+          type: string
+          format: date-time
+          nullable: true
+
+    DelegatedReminderSummary:
+      type: object
+      required:
+        - delegated_reminder_id
+        - sender_user_id
+        - recipient_identity
+        - due_time_utc
+        - status
+      properties:
+        delegated_reminder_id:
+          type: string
+          format: uuid
+        sender_user_id:
+          type: string
+        recipient_identity:
+          type: string
+        due_time_utc:
+          type: string
+          format: date-time
+        status:
+          type: string
+
+    DelegatedReminderQueryResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DelegatedReminderSummary'
+
+    DelegatedDeliveryResultRequest:
+      type: object
+      required:
+        - principal_context
+        - attempt_index
+        - result
+      properties:
+        principal_context:
+          $ref: '#/components/schemas/PrincipalContext'
+        attempt_index:
+          type: integer
+          minimum: 1
+          maximum: 5
+        result:
+          type: string
+          enum:
+            - delivered
+            - transient_failure
+            - permanent_invalid_recipient
+            - permanent_permission
+            - system_error
+        failure_detail:
+          type: string
+          nullable: true
+        provider_reference:
+          type: string
+          nullable: true
+
+x-retry-policy:
+  delegated_delivery:
+    attempts: 5
+    schedule_seconds: [1, 2, 4, 8, 16]
+    retry_on: [transient_failure, system_error]
+    terminal_on: [permanent_invalid_recipient, permanent_permission]
+
+x-failure-notification:
+  sender_notification_required: true
+  sender_notification_deadline_seconds: 60
+  failure_classes:
+    - transient_exhausted
+    - permanent_invalid_recipient
+    - permanent_permission
+    - system_error
