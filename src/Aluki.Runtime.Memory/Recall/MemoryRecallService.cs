@@ -21,6 +21,7 @@ public sealed class MemoryRecallService
     private readonly IEmbeddingClient _embeddingClient;
     private readonly MemoryStore _store;
     private readonly IChatModelRouter _router;
+    private readonly MemoryRecallResponseAssembler _assembler;
     private readonly MemoryOptions _options;
     private readonly ILogger<MemoryRecallService> _logger;
 
@@ -28,12 +29,14 @@ public sealed class MemoryRecallService
         IEmbeddingClient embeddingClient,
         MemoryStore store,
         IChatModelRouter router,
+        MemoryRecallResponseAssembler assembler,
         IOptions<MemoryOptions> options,
         ILogger<MemoryRecallService> logger)
     {
         _embeddingClient = embeddingClient;
         _store = store;
         _router = router;
+        _assembler = assembler;
         _options = options.Value;
         _logger = logger;
     }
@@ -65,40 +68,31 @@ public sealed class MemoryRecallService
             return await NoResultAsync(principal, hasDeleted ? "deleted_evidence_gap" : "no_evidence", correlationId, cancellationToken);
         }
 
-        var citations = corroboration.Relevant
-            .Select(c => new Citation(c.ArtifactId, c.ProvenanceRef))
-            .ToList();
-
         if (corroboration.Decision == RecallDecision.Low)
         {
-            var single = corroboration.Relevant[0];
-            var lowClaim = new RecallClaim("claim-1", single.ContentText ?? string.Empty, "low_confidence", citations);
             await _store.WriteRecallAuditAsync(
                 principal, MemoryAuditEventName.RecallLowConfidence, MemoryStatus.LowConfidence, correlationId, cancellationToken);
 
             return new MemoryRecallOutcome(
                 MemoryStatus.LowConfidence,
-                new RecallResult(
-                    Confidence: "low",
-                    ClarificationQuestion: "Solo encontré una nota relacionada; ¿puedes dar más detalle para confirmar?",
-                    NoResultReason: null,
-                    TopicGroups: [],
-                    Claims: [lowClaim]));
+                _assembler.AssembleLowConfidence(corroboration.Relevant[0]));
         }
 
         var answer = await SynthesizeAsync(queryText, corroboration.Relevant, correlationId, cancellationToken);
-        var claim = new RecallClaim("claim-1", answer, "confirmed", citations);
+        if (MemoryContinuityPolicy.IsCrossChannel(corroboration.Relevant))
+        {
+            _logger.LogInformation(
+                "memory.recall_cross_channel channels={Channels} correlation_id={CorrelationId}",
+                string.Join(",", MemoryContinuityPolicy.DistinctChannels(corroboration.Relevant)),
+                correlationId);
+        }
+
         await _store.WriteRecallAuditAsync(
             principal, MemoryAuditEventName.RecallGrounded, MemoryStatus.GroundedResult, correlationId, cancellationToken);
 
         return new MemoryRecallOutcome(
             MemoryStatus.GroundedResult,
-            new RecallResult(
-                Confidence: "confirmed",
-                ClarificationQuestion: null,
-                NoResultReason: null,
-                TopicGroups: [],
-                Claims: [claim]));
+            _assembler.AssembleGrounded(answer, corroboration.Relevant));
     }
 
     private async Task<MemoryRecallOutcome> NoResultAsync(

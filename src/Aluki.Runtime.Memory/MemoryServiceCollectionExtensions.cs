@@ -25,6 +25,8 @@ public static class MemoryServiceCollectionExtensions
         services.AddSingleton<MemoryIntentClassifierSkill>();
         services.AddSingleton<MemoryScopeGuard>();
         services.AddSingleton<MemoryStore>();
+        services.AddSingleton<TopicGroupingSkill>();
+        services.AddSingleton<MemoryRecallResponseAssembler>();
         services.AddSingleton<MemoryRecallService>();
         services.AddSingleton<MemoryInteractionCoordinator>();
 

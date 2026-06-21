@@ -1,7 +1,12 @@
 namespace Aluki.Runtime.Memory.Recall;
 
 /// <summary>A retrieved memory artifact considered as recall evidence.</summary>
-public sealed record RecallCandidate(Guid ArtifactId, string? ContentText, string ProvenanceRef, double Distance);
+public sealed record RecallCandidate(
+    Guid ArtifactId,
+    string? ContentText,
+    string ProvenanceRef,
+    double Distance,
+    string SourceChannel = "");
 
 public enum RecallDecision
 {

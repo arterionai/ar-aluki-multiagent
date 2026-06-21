@@ -110,7 +110,7 @@ public sealed class MemoryStore
 
         await using var command = new NpgsqlCommand(
             """
-            select memory_artifact_id, content_text, provenance_ref, (embedding <=> @q::vector) as dist
+            select memory_artifact_id, content_text, provenance_ref, source_channel, (embedding <=> @q::vector) as dist
             from memory_artifact
             where context_id = @context and deleted_at_utc is null and embedding is not null
             order by embedding <=> @q::vector
@@ -134,7 +134,8 @@ public sealed class MemoryStore
                     ArtifactId: reader.GetGuid(0),
                     ContentText: reader.IsDBNull(1) ? null : reader.GetString(1),
                     ProvenanceRef: reader.GetString(2),
-                    Distance: reader.GetDouble(3)));
+                    Distance: reader.GetDouble(4),
+                    SourceChannel: reader.IsDBNull(3) ? string.Empty : reader.GetString(3)));
             }
         }
 
