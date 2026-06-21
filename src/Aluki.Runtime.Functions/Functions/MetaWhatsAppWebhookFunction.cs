@@ -28,7 +28,7 @@ public sealed class MetaWhatsAppWebhookFunction
 
     [Function("MetaWhatsAppWebhookVerify")]
     public HttpResponseData Verify(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "webhooks/meta/whatsapp")]
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "whatsapp")]
         HttpRequestData request)
     {
         var query = ParseQuery(request.Url.Query);
@@ -53,7 +53,7 @@ public sealed class MetaWhatsAppWebhookFunction
 
     [Function("MetaWhatsAppWebhookInbound")]
     public async Task<HttpResponseData> InboundAsync(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "webhooks/meta/whatsapp")]
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "whatsapp")]
         HttpRequestData request,
         CancellationToken cancellationToken)
     {
