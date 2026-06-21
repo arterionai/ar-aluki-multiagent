@@ -2,13 +2,7 @@
   "mcpServers": {
     "azure": {
       "command": "npx",
-      "args": ["-y", "@azure/mcp@latest", "server", "start"],
-      "env": {
-        "AZURE_CLIENT_ID": "<TU_CLIENT_ID>",
-        "AZURE_TENANT_ID": "<TU_TENANT_ID>",
-        "AZURE_CLIENT_SECRET": "<TU_CLIENT_SECRET>",
-        "AZURE_SUBSCRIPTION_ID": "<TU_SUBSCRIPTION_ID>"
-      }
+      "args": ["-y", "@azure/mcp@latest", "server", "start"]
     }
   }
 }
