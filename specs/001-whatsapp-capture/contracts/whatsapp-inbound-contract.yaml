@@ -1,0 +1,169 @@
+openapi: 3.0.3
+info:
+  title: Aluki WhatsApp Inbound Capture Contract
+  version: 0.1.0
+  description: Contract for inbound WhatsApp capture foundation webhook processing.
+paths:
+  /api/channels/whatsapp/inbound:
+    post:
+      summary: Receive inbound WhatsApp event
+      operationId: receiveWhatsAppInbound
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhatsAppInboundEnvelope'
+      responses:
+        '202':
+          description: Accepted or duplicate-safe accepted response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureAck'
+        '400':
+          description: Invalid payload or missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureError'
+        '403':
+          description: Scope denied (tenant/context/principal mismatch)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureError'
+components:
+  schemas:
+    WhatsAppInboundEnvelope:
+      type: object
+      required:
+        - provider_message_id
+        - source_channel
+        - sender
+        - payload
+        - occurred_at_utc
+      properties:
+        provider_message_id:
+          type: string
+          minLength: 1
+        source_channel:
+          type: string
+          enum: [whatsapp]
+        sender:
+          $ref: '#/components/schemas/SenderInfo'
+        context_metadata:
+          $ref: '#/components/schemas/ContextMetadata'
+        payload:
+          $ref: '#/components/schemas/Payload'
+        occurred_at_utc:
+          type: string
+          format: date-time
+        correlation_id:
+          type: string
+          description: Optional inbound correlation id. If absent, runtime generates one.
+    SenderInfo:
+      type: object
+      required:
+        - external_user_id
+      properties:
+        external_user_id:
+          type: string
+        display_name:
+          type: string
+    ContextMetadata:
+      type: object
+      properties:
+        tenant_hint:
+          type: string
+          format: uuid
+        context_id:
+          type: string
+          format: uuid
+    Payload:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum: [text, image, audio, forwarded, unsupported]
+        text:
+          type: string
+        media:
+          $ref: '#/components/schemas/MediaMetadata'
+        forwarded:
+          $ref: '#/components/schemas/ForwardedMetadata'
+        raw_envelope_ref:
+          type: string
+    MediaMetadata:
+      type: object
+      properties:
+        media_type:
+          type: string
+          enum: [image, audio]
+        content_type:
+          type: string
+        provider_media_id:
+          type: string
+        media_ref_uri:
+          type: string
+        byte_length:
+          type: integer
+          format: int64
+          minimum: 0
+    ForwardedMetadata:
+      type: object
+      properties:
+        original_sender_ref:
+          type: string
+        original_message_time_utc:
+          type: string
+          format: date-time
+    CaptureAck:
+      type: object
+      required:
+        - status
+        - correlation_id
+        - idempotency_key
+      properties:
+        status:
+          type: string
+          enum: [accepted, duplicate_suppressed, accepted_unsupported]
+        correlation_id:
+          type: string
+        idempotency_key:
+          type: string
+          description: Composite representation of tenant/source/provider message identity.
+        canonical_message_id:
+          type: string
+          format: uuid
+          nullable: true
+        audit_event:
+          type: string
+          enum:
+            - capture.accepted
+            - capture.duplicate_suppressed
+            - capture.unsupported_payload
+    CaptureError:
+      type: object
+      required:
+        - status
+        - correlation_id
+        - code
+      properties:
+        status:
+          type: string
+          enum: [rejected, failed_terminal]
+        correlation_id:
+          type: string
+        code:
+          type: string
+          enum: [scope_denied, invalid_payload, retry_exhausted]
+        message:
+          type: string
+        audit_event:
+          type: string
+          enum:
+            - capture.scope_denied
+            - capture.failed_terminal

@@ -1,0 +1,319 @@
+openapi: 3.0.3
+info:
+  title: Link Capture Skill Contract
+  version: 0.1.0
+  description: >-
+    Contract for tenant-scoped link capture, one-time confirmation resolution,
+    secure enrichment outcomes, and recall rendering.
+
+paths:
+  /skills/link-capture/capture:
+    post:
+      summary: Capture and upsert canonical link artifacts from inbound message
+      operationId: captureLink
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureLinkRequest'
+      responses:
+        '200':
+          description: Capture processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureLinkResponse'
+
+  /skills/link-capture/confirm:
+    post:
+      summary: Resolve active pending confirmation exactly once
+      operationId: resolveLinkConfirmation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveConfirmationRequest'
+      responses:
+        '200':
+          description: Confirmation outcome returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveConfirmationResponse'
+
+  /skills/link-capture/recall:
+    post:
+      summary: Recall tenant-scoped links with grounded provenance
+      operationId: recallLinks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecallLinksRequest'
+      responses:
+        '200':
+          description: Recall results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecallLinksResponse'
+
+components:
+  schemas:
+    CaptureLinkRequest:
+      type: object
+      required:
+        - tenantId
+        - contextScopeId
+        - principalId
+        - sourceChannel
+        - sourceMessageId
+        - messageText
+      properties:
+        tenantId:
+          type: string
+        contextScopeId:
+          type: string
+        principalId:
+          type: string
+        sourceChannel:
+          type: string
+        sourceMessageId:
+          type: string
+        sourceTimestampUtc:
+          type: string
+          format: date-time
+        messageText:
+          type: string
+        idempotencyKey:
+          type: string
+          description: Optional explicit key; service computes deterministic key when omitted.
+
+    CaptureLinkResponse:
+      type: object
+      required:
+        - outcome
+        - artifacts
+      properties:
+        outcome:
+          type: string
+          enum:
+            - created
+            - upsert_merged
+            - idempotent_noop
+            - invalid_url
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/LinkArtifactSummary'
+        pendingConfirmation:
+          $ref: '#/components/schemas/PendingConfirmationSummary'
+        telemetry:
+          $ref: '#/components/schemas/TelemetryEnvelope'
+
+    ResolveConfirmationRequest:
+      type: object
+      required:
+        - tenantId
+        - contextScopeId
+        - sessionId
+        - conversationId
+        - principalId
+        - sourceMessageId
+        - reply
+      properties:
+        tenantId:
+          type: string
+        contextScopeId:
+          type: string
+        sessionId:
+          type: string
+        conversationId:
+          type: string
+        principalId:
+          type: string
+        sourceMessageId:
+          type: string
+        reply:
+          type: string
+          enum:
+            - yes
+            - no
+
+    ResolveConfirmationResponse:
+      type: object
+      required:
+        - outcome
+        - sideEffectsApplied
+      properties:
+        outcome:
+          type: string
+          enum:
+            - resolved_yes
+            - resolved_no
+            - expired
+            - already_resolved
+            - no_active_pending
+        sideEffectsApplied:
+          type: boolean
+          description: True only for first valid consume transition.
+        confirmationId:
+          type: string
+          format: uuid
+        terminalState:
+          type: string
+          enum:
+            - resolved_yes
+            - resolved_no
+            - expired
+        telemetry:
+          $ref: '#/components/schemas/TelemetryEnvelope'
+
+    RecallLinksRequest:
+      type: object
+      required:
+        - tenantId
+        - contextScopeId
+        - principalId
+        - query
+      properties:
+        tenantId:
+          type: string
+        contextScopeId:
+          type: string
+        principalId:
+          type: string
+        query:
+          type: string
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 10
+
+    RecallLinksResponse:
+      type: object
+      required:
+        - results
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/LinkRecallItem'
+        telemetry:
+          $ref: '#/components/schemas/TelemetryEnvelope'
+
+    LinkArtifactSummary:
+      type: object
+      required:
+        - linkArtifactId
+        - canonicalUrl
+        - enrichmentStatus
+        - enrichmentReason
+        - description
+      properties:
+        linkArtifactId:
+          type: string
+          format: uuid
+        canonicalUrl:
+          type: string
+          format: uri
+        enrichmentStatus:
+          $ref: '#/components/schemas/EnrichmentStatus'
+        enrichmentReason:
+          type: string
+          nullable: true
+        description:
+          type: string
+
+    PendingConfirmationSummary:
+      type: object
+      required:
+        - confirmationId
+        - state
+        - expiresAtUtc
+      properties:
+        confirmationId:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum:
+            - pending
+            - resolved_yes
+            - resolved_no
+            - expired
+        expiresAtUtc:
+          type: string
+          format: date-time
+
+    LinkRecallItem:
+      type: object
+      required:
+        - canonicalUrl
+        - description
+        - enrichmentStatus
+        - provenance
+      properties:
+        canonicalUrl:
+          type: string
+          format: uri
+        description:
+          type: string
+          minLength: 1
+        enrichmentStatus:
+          $ref: '#/components/schemas/EnrichmentStatus'
+        enrichmentReason:
+          type: string
+          nullable: true
+        provenance:
+          $ref: '#/components/schemas/ProvenanceRef'
+
+    EnrichmentStatus:
+      type: string
+      enum:
+        - enriched
+        - policy_blocked
+        - timeout
+        - failed
+
+    ProvenanceRef:
+      type: object
+      required:
+        - sourceMessageId
+        - sourceChannel
+        - capturedAtUtc
+      properties:
+        sourceMessageId:
+          type: string
+        sourceChannel:
+          type: string
+        capturedAtUtc:
+          type: string
+          format: date-time
+
+    TelemetryEnvelope:
+      type: object
+      properties:
+        eventIds:
+          type: array
+          items:
+            type: string
+        durationMs:
+          type: integer
+          minimum: 0
+
+x-requirement-mapping:
+  FR-001: CaptureLinkRequest.messageText URL detection and canonicalUrl persistence
+  FR-003: CaptureLinkResponse.outcome=idempotent_noop
+  FR-005a: ResolveConfirmationResponse.sideEffectsApplied and already_resolved outcome
+  FR-006: ResolveConfirmationResponse.outcome=expired
+  FR-008a: EnrichmentStatus includes timeout and attempt cap handled by service policy
+  FR-008b: LinkArtifactSummary includes fallback description with status/reason
+  FR-010a: LinkRecallItem includes enrichmentStatus and enrichmentReason
+  FR-011: LinkRecallItem.provenance required
+  FR-014: CaptureLinkResponse.outcome=upsert_merged
+  FR-015: deterministic idempotent_noop outcome

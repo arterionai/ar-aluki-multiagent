@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Aluki.Runtime.Abstractions/Aluki.Runtime.Abstractions.csproj" />
+    <Project Path="src/Aluki.Runtime.Functions/Aluki.Runtime.Functions.csproj" />
     <Project Path="src/Aluki.Runtime.Host/Aluki.Runtime.Host.csproj" />
   </Folder>
 </Solution>

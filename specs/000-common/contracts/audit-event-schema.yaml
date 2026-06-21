@@ -1,0 +1,273 @@
+# Global Audit Event Schema
+
+**Status**: Baseline  
+**Version**: 1.0  
+**Date**: 2026-06-21
+
+## Overview
+
+All audit events across Aluki must conform to this unified schema for centralized observability, compliance, and debugging.
+
+## Base Schema
+
+```yaml
+audit_event:
+  type: object
+  required:
+    - event_id
+    - event_type
+    - timestamp
+    - tenant_id
+    - principal_id
+    - source_feature
+    - action
+    - outcome
+    - audit_id
+  properties:
+    event_id:
+      type: string
+      format: uuid
+      description: Unique event identifier (for deduplication)
+    
+    event_type:
+      type: string
+      enum:
+        - capture.accepted
+        - capture.rejected
+        - capture.failed
+        - memory.created
+        - memory.recalled
+        - memory.deleted
+        - reminder.created
+        - reminder.confirmed
+        - reminder.snoozed
+        - reminder.delivered
+        - reminder.failed
+        - suggestion.created
+        - suggestion.classified
+        - suggestion.rewarded
+        - calendar.event_created
+        - calendar.event_updated
+        - link.captured
+        - link.enriched
+        - domain.dispatched
+        - domain.fallback
+        - billing.entitlement_checked
+        - billing.ledger_recorded
+        - billing.invoice_generated
+        - billing.quota_exceeded
+        - consent.granted
+        - consent.revoked
+        - policy.decision
+        - policy.denied
+      description: Standardized event type across all features
+    
+    timestamp:
+      type: string
+      format: date-time
+      description: Event occurrence time (UTC)
+    
+    tenant_id:
+      type: string
+      format: uuid
+      description: Tenant scope (mandatory for all events)
+    
+    principal_id:
+      type: string
+      format: uuid
+      description: User or service principal (mandatory, may be system for background jobs)
+    
+    source_feature:
+      type: string
+      enum:
+        - whatsapp-capture
+        - personal-memory
+        - calendar-integration
+        - ai-extraction
+        - reminders
+        - delegated-reminders
+        - feedback-suggestions
+        - suggestions-admin
+        - youtube-links
+        - link-capture
+        - domain-agents
+        - billing
+        - governance
+        - semantic-graph
+      description: Feature/domain that emitted the event
+    
+    action:
+      type: string
+      description: Specific operation (e.g., "create_reminder", "check_entitlement")
+    
+    outcome:
+      type: string
+      enum:
+        - success
+        - partial
+        - failure
+        - denied
+      description: Result of the operation
+    
+    outcome_reason:
+      type: string
+      description: Machine-readable reason code (e.g., "quota_exceeded", "insufficient_balance", "unauthorized")
+    
+    outcome_detail:
+      type: object
+      description: Additional context (non-sensitive)
+      properties:
+        duration_ms:
+          type: integer
+          description: Execution time
+        affected_records:
+          type: integer
+          description: Count of records affected
+        policy_id:
+          type: string
+          description: If policy-driven denial
+    
+    idempotency_key:
+      type: string
+      description: For duplicate detection (optional, required for side-effect operations)
+    
+    audit_id:
+      type: string
+      format: uuid
+      description: Audit chain link (correlates parent operation to child events)
+    
+    parent_event_id:
+      type: string
+      format: uuid
+      description: For event causality chains (optional)
+    
+    request_context:
+      type: object
+      description: Request metadata
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          enum: [whatsapp, teams, email, slack, web, api]
+        session_id:
+          type: string
+          format: uuid
+    
+    tags:
+      type: array
+      items:
+        type: string
+      description: Optional tags for filtering (e.g., ["critical", "billing", "compliance"])
+
+```
+
+## Feature-Specific Extensions
+
+Each feature may extend the base schema with domain-specific fields, always prefixed with the feature name:
+
+### WhatsApp Capture Events
+
+```yaml
+whatsapp_specific:
+  properties:
+    whatsapp_message_id:
+      type: string
+    whatsapp_thread_id:
+      type: string
+    retry_count:
+      type: integer
+    delivery_state:
+      enum: [enqueued, delivered, failed, expired]
+```
+
+### Billing Events
+
+```yaml
+billing_specific:
+  properties:
+    billing_meter_id:
+      type: string
+    usage_amount:
+      type: number
+    unit:
+      type: string
+    price_snapshot_id:
+      type: string
+      description: Immutable reference to price at time of recording
+    entitlement_mode:
+      enum: [payg, package]
+    credit_balance_before:
+      type: number
+    credit_balance_after:
+      type: number
+```
+
+### Policy/Governance Events
+
+```yaml
+policy_specific:
+  properties:
+    policy_id:
+      type: string
+    policy_version:
+      type: integer
+    constraint_violated:
+      type: string
+    allowed_by_exception:
+      type: boolean
+    exception_id:
+      type: string
+```
+
+## Emission Requirements
+
+- **Idempotency**: Each feature MUST include `idempotency_key` for all events that cause side effects
+- **Audit Chain**: Features MUST set `parent_event_id` when orchestrating multi-step workflows
+- **Tenant Isolation**: `tenant_id` MUST NEVER be null or inherited from context; must be explicitly bound
+- **Timestamp**: MUST be UTC and consistent across distributed logs
+- **Outcome Consistency**: If `outcome=success`, `outcome_reason` SHOULD be null or describe success state
+
+## Observability Integration
+
+All audit events flow to:
+1. **Azure Application Insights**: Structured telemetry dimensions
+2. **PostgreSQL `audit_events` table**: Durable WORM (write-once-read-many) log with RLS
+3. **Event Stream (Event Grid/Service Bus)**: Real-time compliance and alerting
+
+## Example: Reminder Creation Event
+
+```json
+{
+  "event_id": "550e8400-e29b-41d4-a716-446655440000",
+  "event_type": "reminder.created",
+  "timestamp": "2026-06-21T14:32:10.123Z",
+  "tenant_id": "tenant-001",
+  "principal_id": "user-001",
+  "source_feature": "reminders",
+  "action": "create_reminder",
+  "outcome": "success",
+  "idempotency_key": "reminder-create-20260621-user001-abc123",
+  "audit_id": "audit-chain-001",
+  "request_context": {
+    "request_id": "req-555",
+    "channel": "whatsapp",
+    "session_id": "session-001"
+  },
+  "outcome_detail": {
+    "duration_ms": 145,
+    "affected_records": 1
+  },
+  "tags": ["reminder", "automation"]
+}
+```
+
+---
+
+## Compliance Notes
+
+- All audit events are **immutable** once persisted
+- Retention policy: **7 years** for financial/billing events, **2 years** for others
+- **Sensitive data** (content, PII) MUST NOT be included in audit events; use hashes/IDs only
+- **Audit logs are not backups**: Separate backup/recovery procedures apply

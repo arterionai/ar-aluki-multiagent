@@ -1,0 +1,455 @@
+openapi: 3.0.3
+info:
+  title: Extraction Skill Contract
+  version: 1.0.0
+  description: Contract between KnowledgeAgent and ExtractionSkill for AI extraction workflows.
+
+paths:
+  /skills/extraction/execute:
+    post:
+      summary: Execute extraction request
+      operationId: executeExtraction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtractionRequest'
+      responses:
+        '200':
+          description: Extraction completed or accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractionResponse'
+
+  /skills/extraction/jobs/{jobId}:
+    get:
+      summary: Query extraction job status
+      operationId: getExtractionJobStatus
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job status details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatusResponse'
+        '404':
+          description: Job not found in tenant scope
+
+components:
+  schemas:
+    ExtractionRequest:
+      type: object
+      required:
+        - extraction_id
+        - tenant_id
+        - principal_context
+        - extraction_input
+      properties:
+        extraction_id:
+          type: string
+          format: uuid
+          description: Idempotency key for extraction submission.
+        tenant_id:
+          type: string
+          format: uuid
+        principal_context:
+          $ref: '#/components/schemas/PrincipalContext'
+        extraction_input:
+          oneOf:
+            - $ref: '#/components/schemas/AudioInput'
+            - $ref: '#/components/schemas/TextInput'
+            - $ref: '#/components/schemas/ImageInput'
+        processing_options:
+          $ref: '#/components/schemas/ProcessingOptions'
+
+    PrincipalContext:
+      type: object
+      required:
+        - principal_id
+        - tenant_id
+        - context_type
+      properties:
+        principal_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        context_type:
+          type: string
+          enum: [personal, team, delegated]
+        context_id:
+          type: string
+          format: uuid
+
+    ProcessingOptions:
+      type: object
+      properties:
+        async_mode:
+          type: boolean
+          default: false
+        language_hint:
+          type: string
+          description: Optional language code override.
+        confidence_threshold:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          default: 0.70
+        include_raw:
+          type: boolean
+          default: false
+
+    AudioInput:
+      type: object
+      required:
+        - input_type
+        - audio_data
+        - encoding
+      properties:
+        input_type:
+          type: string
+          enum: [audio]
+        audio_data:
+          type: string
+          format: byte
+        encoding:
+          type: string
+          enum: [wav, mp3, flac, ogg]
+        source:
+          type: string
+          enum: [whatsapp, voice_note, upload]
+        duration_seconds:
+          type: integer
+          minimum: 1
+          maximum: 3600
+
+    TextInput:
+      type: object
+      required:
+        - input_type
+        - text
+      properties:
+        input_type:
+          type: string
+          enum: [text]
+        text:
+          type: string
+          minLength: 1
+          maxLength: 100000
+        source:
+          type: string
+          enum: [whatsapp, clipboard, forwarded]
+        metadata:
+          type: object
+          additionalProperties: true
+
+    ImageInput:
+      type: object
+      required:
+        - input_type
+        - image_data
+        - image_type
+      properties:
+        input_type:
+          type: string
+          enum: [image]
+        image_data:
+          type: string
+          format: byte
+        image_type:
+          type: string
+          enum: [receipt]
+        encoding:
+          type: string
+          enum: [jpg, png, webp]
+        source:
+          type: string
+          enum: [whatsapp, camera, upload]
+
+    ExtractionResponse:
+      type: object
+      required:
+        - status
+        - job_id
+        - job_status
+        - audit_trail
+      properties:
+        status:
+          type: string
+          enum: [success, partial_success, failed, pending]
+        job_id:
+          type: string
+          format: uuid
+        job_status:
+          type: string
+          enum: [pending, processing, completed_success, completed_with_warnings, failed]
+        extraction_results:
+          $ref: '#/components/schemas/ExtractionResults'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/WarningItem'
+        error:
+          $ref: '#/components/schemas/ErrorInfo'
+        status_url:
+          type: string
+          format: uri
+        audit_trail:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        processing_metadata:
+          $ref: '#/components/schemas/ProcessingMetadata'
+
+    JobStatusResponse:
+      type: object
+      required:
+        - job_id
+        - job_status
+        - completion_pct
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        job_status:
+          type: string
+          enum: [pending, processing, completed_success, completed_with_warnings, failed]
+        completion_pct:
+          type: number
+          minimum: 0
+          maximum: 100
+        segment_count:
+          type: integer
+          minimum: 0
+        updated_at:
+          type: string
+          format: date-time
+
+    ExtractionResults:
+      type: object
+      properties:
+        extraction_type:
+          type: string
+          enum: [transcription, text_summary, receipt_ocr]
+        overall_confidence:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+        extracted_fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExtractionField'
+        raw_content:
+          oneOf:
+            - $ref: '#/components/schemas/TranscriptionContent'
+            - $ref: '#/components/schemas/TextContent'
+            - $ref: '#/components/schemas/ReceiptContent'
+        model_info:
+          $ref: '#/components/schemas/ModelInfo'
+
+    ExtractionField:
+      type: object
+      required:
+        - field_name
+        - field_type
+        - confidence_score
+        - confidence_tier
+      properties:
+        field_name:
+          type: string
+        field_type:
+          type: string
+          enum: [text, number, date, entity, decision_item, amount]
+        extracted_value:
+          type: object
+          additionalProperties: true
+        confidence_score:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+        confidence_tier:
+          type: string
+          enum: [high, medium, low]
+        confidence_justification:
+          type: string
+        source_segment_index:
+          type: integer
+        detected_language:
+          type: string
+
+    TranscriptionContent:
+      type: object
+      properties:
+        full_transcription:
+          type: string
+        language:
+          type: string
+        language_confidence:
+          type: number
+        segments:
+          type: array
+          items:
+            type: object
+            properties:
+              segment_index:
+                type: integer
+              text:
+                type: string
+              start_ms:
+                type: integer
+              end_ms:
+                type: integer
+              detected_language:
+                type: string
+        audio_duration_ms:
+          type: integer
+
+    TextContent:
+      type: object
+      properties:
+        summary:
+          type: string
+        action_items:
+          type: array
+          items:
+            type: object
+            properties:
+              action:
+                type: string
+              owner:
+                type: string
+              due_date:
+                type: string
+                format: date
+              priority:
+                type: string
+                enum: [high, medium, low]
+              confidence:
+                type: number
+        decisions:
+          type: array
+          items:
+            type: object
+            properties:
+              decision_statement:
+                type: string
+              confidence:
+                type: number
+        entities:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              entity_type:
+                type: string
+                enum: [person, organization, location, product, event]
+
+    ReceiptContent:
+      type: object
+      properties:
+        vendor_name:
+          type: string
+        vendor_confidence:
+          type: number
+        transaction_date:
+          type: string
+          format: date
+        transaction_date_confidence:
+          type: number
+        total_amount:
+          type: object
+          properties:
+            amount:
+              type: number
+            currency:
+              type: string
+        total_amount_confidence:
+          type: number
+        tax_id_rfc:
+          type: string
+          description: Mexican RFC when detected.
+        tax_id_rfc_confidence:
+          type: number
+        ocr_confidence:
+          type: number
+        is_unreadable:
+          type: boolean
+        manual_review_required:
+          type: boolean
+
+    ModelInfo:
+      type: object
+      properties:
+        provider:
+          type: string
+        model_name:
+          type: string
+        version:
+          type: string
+
+    WarningItem:
+      type: object
+      properties:
+        code:
+          type: string
+          enum: [confidence_medium, confidence_low, partial_result, ocr_fallback_used, unreadable_fragment]
+        message:
+          type: string
+        affected_fields:
+          type: array
+          items:
+            type: string
+
+    ErrorInfo:
+      type: object
+      properties:
+        code:
+          type: string
+          enum: [unsupported_format, language_undetectable, ocr_failed_all, api_timeout, rate_limited, internal_error, scope_denied]
+        message:
+          type: string
+
+    ProcessingMetadata:
+      type: object
+      properties:
+        processing_time_ms:
+          type: integer
+        segment_count:
+          type: integer
+        completion_pct:
+          type: number
+          minimum: 0
+          maximum: 100
+
+    AuditEvent:
+      type: object
+      properties:
+        event_type:
+          type: string
+          enum: [job_created, job_started, language_detected, extraction_completed, extraction_failed, confidence_tier_assigned, manual_review_flagged, result_persisted, error_recorded]
+        created_at:
+          type: string
+          format: date-time
+        details:
+          type: object
+          additionalProperties: true
+
+x-telemetry-events:
+  - extraction.requested
+  - extraction.language_detected
+  - extraction.provider_called
+  - extraction.confidence_tier_assigned
+  - extraction.completed
+  - extraction.failed

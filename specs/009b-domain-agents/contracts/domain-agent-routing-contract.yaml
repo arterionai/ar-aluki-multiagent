@@ -1,0 +1,303 @@
+openapi: 3.0.3
+info:
+  title: Domain Agent Routing Contract
+  version: 1.0.0
+  description: Contract for deterministic domain-agent dispatch with precedence, tie-break, fallback constraints, and failure containment auditing.
+
+paths:
+  /runtime/domain-dispatch/execute:
+    post:
+      summary: Execute one deterministic dispatch cycle
+      operationId: executeDomainDispatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DispatchRequest'
+      responses:
+        '200':
+          description: Dispatch cycle completed with selected route or fallback
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DispatchResponse'
+
+  /runtime/domain-dispatch/audit/{dispatchCycleId}:
+    get:
+      summary: Retrieve immutable audit evidence for a dispatch cycle
+      operationId: getDispatchAudit
+      parameters:
+        - name: dispatchCycleId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Audit evidence for dispatch cycle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DispatchAuditBundle'
+        '404':
+          description: Dispatch cycle not found for tenant scope
+
+components:
+  schemas:
+    DispatchRequest:
+      type: object
+      required:
+        - dispatch_cycle_id
+        - message
+        - principal_context
+        - routing_precedence
+      properties:
+        dispatch_cycle_id:
+          type: string
+          format: uuid
+        message:
+          $ref: '#/components/schemas/UnifiedMessage'
+        principal_context:
+          $ref: '#/components/schemas/PrincipalContext'
+        routing_precedence:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            type: string
+            enum: [policy_gating, eligibility_evaluation, deterministic_selection, fallback]
+          description: Must match fixed order exactly.
+        fallback_policy:
+          type: object
+          properties:
+            fallback_agent_id:
+              type: string
+              default: MemoryAgent
+            fallback_condition:
+              type: string
+              enum: [no_eligible_agent]
+            allowed_on_selected_failure:
+              type: boolean
+              default: false
+
+    UnifiedMessage:
+      type: object
+      required:
+        - message_id
+        - tenant_id
+        - normalized_payload_hash
+        - correlation_id
+      properties:
+        message_id:
+          type: string
+        tenant_id:
+          type: string
+          format: uuid
+        channel:
+          type: string
+          enum: [whatsapp, api, internal]
+        normalized_payload_hash:
+          type: string
+        received_at:
+          type: string
+          format: date-time
+        correlation_id:
+          type: string
+
+    PrincipalContext:
+      type: object
+      required:
+        - tenant_id
+        - principal_id
+        - consent_state
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        principal_id:
+          type: string
+          format: uuid
+        context_type:
+          type: string
+          enum: [personal, team, delegated]
+        context_id:
+          type: string
+          format: uuid
+        consent_state:
+          type: string
+          enum: [granted, denied, stopped]
+
+    EligibleAgent:
+      type: object
+      required:
+        - agent_id
+        - priority
+        - registration_timestamp
+      properties:
+        agent_id:
+          type: string
+          description: Canonical agent identifier.
+        priority:
+          type: integer
+        registration_timestamp:
+          type: string
+          format: date-time
+        eligible:
+          type: boolean
+        reason_code:
+          type: string
+          enum: [eligible, policy_denied, guard_not_matched, disabled]
+
+    RoutingDecision:
+      type: object
+      required:
+        - decision_type
+        - precedence_applied
+        - evaluated_agents
+        - timestamp
+      properties:
+        decision_type:
+          type: string
+          enum: [selected_agent, fallback,policy_denied,failed_contained]
+        selected_agent_id:
+          type: string
+        fallback_agent_id:
+          type: string
+          description: Must be MemoryAgent when fallback is used.
+        fallback_reason:
+          type: string
+          enum: [no_eligible_agent]
+        tie_break:
+          $ref: '#/components/schemas/TieBreakDetails'
+        precedence_applied:
+          type: array
+          items:
+            type: string
+            enum: [policy_gating, eligibility_evaluation, deterministic_selection, fallback]
+        evaluated_agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/EligibleAgent'
+        timestamp:
+          type: string
+          format: date-time
+
+    TieBreakDetails:
+      type: object
+      properties:
+        applied:
+          type: boolean
+        primary_key:
+          type: string
+          enum: [agent_id_lexical_asc]
+        secondary_key:
+          type: string
+          enum: [registration_timestamp_asc]
+        rationale:
+          type: string
+
+    DispatchResponse:
+      type: object
+      required:
+        - dispatch_cycle_id
+        - outcome
+        - routing_decision
+        - audit_events
+      properties:
+        dispatch_cycle_id:
+          type: string
+          format: uuid
+        outcome:
+          type: string
+          enum: [completed, policy_denied, failed_contained]
+        routing_decision:
+          $ref: '#/components/schemas/RoutingDecision'
+        containment:
+          $ref: '#/components/schemas/ContainmentResult'
+        audit_events:
+          type: array
+          items:
+            $ref: '#/components/schemas/DispatchAuditEvent'
+
+    ContainmentResult:
+      type: object
+      properties:
+        applied:
+          type: boolean
+        contained:
+          type: boolean
+        error_category:
+          type: string
+        error_message:
+          type: string
+        fallback_invoked_same_cycle:
+          type: boolean
+          description: Must be false when containment is applied.
+
+    DispatchAuditEvent:
+      type: object
+      required:
+        - event_id
+        - dispatch_cycle_id
+        - event_type
+        - message_id
+        - tenant_id
+        - principal_id
+        - correlation_id
+        - timestamp
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        dispatch_cycle_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+          enum:
+            - policy_denied
+            - routing_selected
+            - routing_fallback
+            - tie_break_applied
+            - agent_failure_contained
+            - state_access_denied
+        message_id:
+          type: string
+        normalized_payload_hash:
+          type: string
+        tenant_id:
+          type: string
+          format: uuid
+        principal_id:
+          type: string
+          format: uuid
+        selected_agent_id:
+          type: string
+        fallback_reason:
+          type: string
+        tie_break_rationale:
+          type: string
+        containment_result:
+          type: string
+          enum: [not_applicable, contained, failed_to_contain]
+        correlation_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    DispatchAuditBundle:
+      type: object
+      required:
+        - dispatch_cycle_id
+        - events
+      properties:
+        dispatch_cycle_id:
+          type: string
+          format: uuid
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/DispatchAuditEvent'
