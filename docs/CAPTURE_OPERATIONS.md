@@ -128,6 +128,24 @@ Suggested dashboards/alerts:
 
 - Migrations: `db/migrations/004_whatsapp_capture_foundation.sql`,
   `db/migrations/005_whatsapp_capture_rls.sql`.
+
+### Migration automation
+
+`azure-deploy-runtime.yml` runs a `migrate-database` job before deploying the
+Function App (deploy is skipped if migrations fail). The job:
+
+1. Opens a temporary firewall rule on `pg-araluki-dev-6155` for the runner IP.
+2. Reads the connection string from Key Vault (`PostgresConnectionString`).
+3. Applies `001`–`005` in order with `psql`, tracked in a `schema_migrations`
+   ledger so already-applied files are skipped.
+4. Removes the firewall rule (always, even on failure).
+
+Server prerequisites:
+- **Public network access** must be enabled (the runner connects over the
+  temporary firewall rule). For private-endpoint-only servers, run migrations
+  from inside the VNet instead.
+- **pgvector** must be allow-listed in the server parameter `azure.extensions`
+  (migration `002` runs `create extension vector`).
 - Tables: `inbound_message_event`, `unified_message_artifact`, `media_artifact`,
   `idempotency_record`, `capture_audit_event`.
 - RLS: all capture tables are tenant-scoped; reads require active membership.

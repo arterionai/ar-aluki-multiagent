@@ -15,6 +15,8 @@ env:
   RESOURCE_GROUP: ar-Aluki
   FUNCTION_APP_NAME: func-araluki-dev-6155
   KEYVAULT_NAME: kvaralukidev6155
+  POSTGRES_SERVER_NAME: pg-araluki-dev-6155
+  POSTGRES_SECRET_NAME: PostgresConnectionString
 
 jobs:
   build-and-validate-infra:
@@ -68,8 +70,107 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-  deploy-function:
+  migrate-database:
     needs: build-and-validate-infra
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Open database firewall for runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER_IP="$(curl -s https://api.ipify.org)"
+          echo "Runner public IP: $RUNNER_IP"
+          az postgres flexible-server firewall-rule create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$POSTGRES_SERVER_NAME" \
+            --rule-name "ghrunner-${{ github.run_id }}" \
+            --start-ip-address "$RUNNER_IP" \
+            --end-ip-address "$RUNNER_IP" \
+            --output none
+
+      - name: Apply database migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CONN="$(az keyvault secret show --vault-name "$KEYVAULT_NAME" --name "$POSTGRES_SECRET_NAME" --query value -o tsv)"
+          echo "::add-mask::$CONN"
+
+          # Parse the Npgsql (ADO.NET) connection string into libpq PG* variables.
+          CONN_LINES="${CONN//;/$'\n'}"
+          while IFS= read -r pair; do
+            [ -z "$pair" ] && continue
+            key="$(printf '%s' "${pair%%=*}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            val="$(printf '%s' "${pair#*=}" | sed 's/^[[:space:]]*//')"
+            case "$key" in
+              host|server) PGHOST="$val" ;;
+              port) PGPORT="$val" ;;
+              database|"database name"|db) PGDATABASE="$val" ;;
+              username|"user id"|user|uid) PGUSER="$val" ;;
+              password|pwd) PGPASSWORD="$val" ;;
+              "ssl mode"|sslmode) PGSSLMODE_RAW="$val" ;;
+            esac
+          done <<< "$CONN_LINES"
+
+          : "${PGHOST:?connection string missing Host}"
+          : "${PGDATABASE:?connection string missing Database}"
+          : "${PGUSER:?connection string missing Username}"
+          : "${PGPASSWORD:?connection string missing Password}"
+          export PGPORT="${PGPORT:-5432}"
+          case "$(printf '%s' "${PGSSLMODE_RAW:-Require}" | tr '[:upper:]' '[:lower:]')" in
+            verifyca) export PGSSLMODE="verify-ca" ;;
+            verifyfull) export PGSSLMODE="verify-full" ;;
+            disable) export PGSSLMODE="disable" ;;
+            allow) export PGSSLMODE="allow" ;;
+            prefer) export PGSSLMODE="prefer" ;;
+            *) export PGSSLMODE="require" ;;
+          esac
+          export PGHOST PGDATABASE PGUSER PGPASSWORD
+          echo "::add-mask::$PGPASSWORD"
+
+          # Migration ledger so idempotent scripts are not re-run unnecessarily.
+          psql -v ON_ERROR_STOP=1 -c \
+            "create table if not exists schema_migrations (filename text primary key, applied_at timestamptz not null default now());"
+
+          for f in 001_init_tenancy 002_init_artifacts 003_enable_rls 004_whatsapp_capture_foundation 005_whatsapp_capture_rls; do
+            applied="$(psql -tA -c "select 1 from schema_migrations where filename = '$f';")"
+            if [ "$applied" = "1" ]; then
+              echo "skip $f (already applied)"
+              continue
+            fi
+            echo "applying $f"
+            psql -v ON_ERROR_STOP=1 -1 -f "db/migrations/$f.sql"
+            psql -v ON_ERROR_STOP=1 -c "insert into schema_migrations (filename) values ('$f');"
+          done
+
+      - name: Remove database firewall rule
+        if: always()
+        shell: bash
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$POSTGRES_SERVER_NAME" \
+            --rule-name "ghrunner-${{ github.run_id }}" \
+            --yes --output none || true
+
+  deploy-function:
+    needs: [build-and-validate-infra, migrate-database]
     runs-on: ubuntu-latest
     if: needs.build-and-validate-infra.outputs.function_project_exists == 'true'
 
