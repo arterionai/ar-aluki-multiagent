@@ -1,0 +1,349 @@
+openapi: 3.0.3
+info:
+  title: Billing and Package Management Contract
+  version: 1.0.0
+  description: Contract for tenant-scoped billing decisions, immutable ledger capture, invoice generation, entitlement status, and reconciliation exports.
+
+paths:
+  /runtime/billing/usage/record:
+    post:
+      summary: Record billable usage and return billing decision
+      operationId: recordBillingUsage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsageRecordRequest'
+      responses:
+        '200':
+          description: Usage processed with billing decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageRecordResponse'
+
+  /runtime/billing/entitlements/{tenantId}:
+    get:
+      summary: Get runtime billing status and remaining quotas
+      operationId: getBillingStatus
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: meterCode
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Billing status view
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingStatusView'
+        '404':
+          description: Billing account not found for tenant scope
+
+  /runtime/billing/invoices/generate:
+    post:
+      summary: Generate invoice for closed cycle deterministically from ledger
+      operationId: generateInvoice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvoiceGenerateRequest'
+      responses:
+        '200':
+          description: Invoice generated or returned idempotently
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceGenerateResponse'
+
+  /runtime/billing/reconciliation/export:
+    post:
+      summary: Export invoice to ledger trace mapping for reconciliation
+      operationId: exportBillingReconciliation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconciliationExportRequest'
+      responses:
+        '200':
+          description: Reconciliation export generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationExportResponse'
+
+components:
+  schemas:
+    PrincipalContext:
+      type: object
+      required:
+        - tenant_id
+        - principal_id
+      properties:
+        tenant_id:
+          type: string
+        principal_id:
+          type: string
+        actor_user_id:
+          type: string
+          nullable: true
+        context_scope_id:
+          type: string
+          nullable: true
+
+    UsageRecordRequest:
+      type: object
+      required:
+        - request_id
+        - principal_context
+        - source_event_id
+        - source_event_time_utc
+        - meter_code
+        - quantity
+        - idempotency_key
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        principal_context:
+          $ref: '#/components/schemas/PrincipalContext'
+        source_event_id:
+          type: string
+        source_event_time_utc:
+          type: string
+          format: date-time
+        meter_code:
+          type: string
+        quantity:
+          type: number
+          format: double
+          minimum: 0
+        idempotency_key:
+          type: string
+        attribution_metadata:
+          type: object
+          additionalProperties: true
+        currency_code:
+          type: string
+          description: Optional override for validation; resolved from BillingAccount in normal path.
+
+    UsageRecordResponse:
+      type: object
+      required:
+        - request_id
+        - tenant_id
+        - billing_mode
+        - decision
+        - outcome
+        - idempotent
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+        billing_mode:
+          type: string
+          enum: [payg, package]
+        decision:
+          type: string
+          enum: [allow_included, allow_credit, allow_overage, allow_payg, deny_hard_stop, deny_status, idempotent_noop]
+        outcome:
+          type: string
+          enum: [ledger_recorded, denied, noop]
+        ledger_entry_id:
+          type: string
+          format: uuid
+          nullable: true
+        denial_reason_code:
+          type: string
+          nullable: true
+        unit_price_snapshot:
+          type: number
+          format: double
+          nullable: true
+        amount_total:
+          type: number
+          format: double
+          nullable: true
+        idempotent:
+          type: boolean
+
+    BillingStatusView:
+      type: object
+      required:
+        - tenant_id
+        - tenant_type
+        - billing_mode
+        - billing_status
+        - effective_at_utc
+      properties:
+        tenant_id:
+          type: string
+        tenant_type:
+          type: string
+          enum: [INDIVIDUAL, ORGANIZATION]
+        billing_mode:
+          type: string
+          enum: [payg, package]
+        billing_status:
+          type: string
+          enum: [active, grace, suspended]
+        package_code:
+          type: string
+          nullable: true
+        remaining_quota_by_meter:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+        remaining_credit_amount:
+          type: number
+          format: double
+        overage_policy_by_meter:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [billable_overage, hard_stop]
+        effective_at_utc:
+          type: string
+          format: date-time
+
+    InvoiceGenerateRequest:
+      type: object
+      required:
+        - request_id
+        - principal_context
+        - cycle_start_utc
+        - cycle_end_utc
+        - idempotency_key
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        principal_context:
+          $ref: '#/components/schemas/PrincipalContext'
+        cycle_start_utc:
+          type: string
+          format: date-time
+        cycle_end_utc:
+          type: string
+          format: date-time
+        idempotency_key:
+          type: string
+
+    InvoiceGenerateResponse:
+      type: object
+      required:
+        - request_id
+        - invoice_id
+        - invoice_number
+        - tenant_id
+        - totals
+        - deterministic_hash
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        invoice_id:
+          type: string
+          format: uuid
+        invoice_number:
+          type: string
+        tenant_id:
+          type: string
+        cycle_start_utc:
+          type: string
+          format: date-time
+        cycle_end_utc:
+          type: string
+          format: date-time
+        totals:
+          type: object
+          required: [subtotal_amount, adjustments_amount, total_amount, currency_code]
+          properties:
+            subtotal_amount:
+              type: number
+              format: double
+            adjustments_amount:
+              type: number
+              format: double
+            total_amount:
+              type: number
+              format: double
+            currency_code:
+              type: string
+        line_count:
+          type: integer
+        deterministic_hash:
+          type: string
+          description: Hash over sorted contributing ledger IDs and line totals.
+
+    ReconciliationExportRequest:
+      type: object
+      required:
+        - request_id
+        - principal_context
+        - invoice_id
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        principal_context:
+          $ref: '#/components/schemas/PrincipalContext'
+        invoice_id:
+          type: string
+          format: uuid
+
+    ReconciliationExportResponse:
+      type: object
+      required:
+        - request_id
+        - invoice_id
+        - tenant_id
+        - export_generated_at_utc
+        - records
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        invoice_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+        export_generated_at_utc:
+          type: string
+          format: date-time
+        records:
+          type: array
+          items:
+            type: object
+            required: [invoice_line_id, ledger_entry_ids, line_total]
+            properties:
+              invoice_line_id:
+                type: string
+                format: uuid
+              ledger_entry_ids:
+                type: array
+                items:
+                  type: string
+                  format: uuid
+              line_total:
+                type: number
+                format: double
+              meter_code:
+                type: string
+                nullable: true
