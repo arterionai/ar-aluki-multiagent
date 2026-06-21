@@ -1,8 +1,11 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using Aluki.Runtime.Capture;
+using Aluki.Runtime.Capture.Channels.WhatsApp;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
+using Microsoft.Extensions.Logging;
 
 namespace Aluki.Runtime.Functions.Functions;
 
@@ -11,6 +14,17 @@ public sealed class MetaWhatsAppWebhookFunction
     private const string VerifyTokenSetting = "Meta__VerifyToken";
     private const string AppSecretSetting = "Meta__AppSecret";
     private const string SignatureHeader = "x-hub-signature-256";
+
+    private readonly WhatsAppCaptureCoordinator _coordinator;
+    private readonly ILogger<MetaWhatsAppWebhookFunction> _logger;
+
+    public MetaWhatsAppWebhookFunction(
+        WhatsAppCaptureCoordinator coordinator,
+        ILogger<MetaWhatsAppWebhookFunction> logger)
+    {
+        _coordinator = coordinator;
+        _logger = logger;
+    }
 
     [Function("MetaWhatsAppWebhookVerify")]
     public HttpResponseData Verify(
@@ -53,6 +67,38 @@ public sealed class MetaWhatsAppWebhookFunction
             {
                 return request.CreateResponse(HttpStatusCode.Unauthorized);
             }
+        }
+
+        // Map the Meta payload to capture envelopes and dispatch each through the
+        // pipeline. Always acknowledge 200 so Meta does not retry the batch;
+        // idempotency makes any genuine redelivery safe.
+        try
+        {
+            var payload = Encoding.UTF8.GetString(body);
+            var envelopes = MetaWebhookMapper.Map(payload);
+            foreach (var envelope in envelopes)
+            {
+                try
+                {
+                    var outcome = await _coordinator.CaptureAsync(envelope, cancellationToken);
+                    _logger.LogInformation(
+                        "Meta inbound captured. provider_message_id={ProviderMessageId} outcome={Outcome} correlation_id={CorrelationId}",
+                        envelope.ProviderMessageId,
+                        outcome.Kind,
+                        outcome.CorrelationId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Meta inbound capture failed. provider_message_id={ProviderMessageId}",
+                        envelope.ProviderMessageId);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to parse Meta webhook payload.");
         }
 
         var response = request.CreateResponse(HttpStatusCode.OK);
