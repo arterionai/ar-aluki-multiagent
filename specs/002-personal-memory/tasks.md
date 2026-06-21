@@ -93,15 +93,15 @@
 
 ### Tests for User Story 3
 
-- [ ] T028 [P] [US3] Add integration tests for topic-group coherence in recall responses in tests/integration/PersonalMemoryTopicGroupingIntegrationTests.cs
-- [ ] T029 [P] [US3] Add integration tests for cross-channel continuity within scope in tests/integration/PersonalMemoryCrossChannelContinuityIntegrationTests.cs
-- [ ] T030 [P] [US3] Add unit tests for topic clustering heuristics and deterministic labeling in tests/unit/TopicGroupingSkillTests.cs
+- [x] T028 [P] [US3] Add integration tests for topic-group coherence in recall responses in tests/integration/Aluki.Runtime.IntegrationTests/PersonalMemoryTopicGroupingIntegrationTests.cs
+- [x] T029 [P] [US3] Add integration tests for cross-channel continuity within scope in tests/integration/Aluki.Runtime.IntegrationTests/PersonalMemoryCrossChannelContinuityIntegrationTests.cs
+- [x] T030 [P] [US3] Add unit tests for topic clustering heuristics and deterministic labeling in tests/unit/Aluki.Runtime.UnitTests/TopicGroupingSkillTests.cs (+ MemoryContinuityPolicyTests.cs)
 
 ### Implementation for User Story 3
 
-- [ ] T031 [US3] Implement topic grouping skill for scoped artifacts in src/Aluki.Runtime.Host/Memory/Skills/TopicGroupingSkill.cs
-- [ ] T032 [US3] Implement multi-channel retrieval continuity policy in src/Aluki.Runtime.Host/Memory/Skills/MemoryContinuityPolicy.cs
-- [ ] T033 [US3] Extend recall response assembler with topic_groups mapping in src/Aluki.Runtime.Host/Memory/Presentation/MemoryRecallResponseAssembler.cs
+- [x] T031 [US3] Implement topic grouping skill for scoped artifacts in src/Aluki.Runtime.Memory/Recall/TopicGroupingSkill.cs
+- [x] T032 [US3] Implement multi-channel retrieval continuity policy in src/Aluki.Runtime.Memory/Recall/MemoryContinuityPolicy.cs
+- [x] T033 [US3] Extend recall response assembler with topic_groups mapping in src/Aluki.Runtime.Memory/Recall/MemoryRecallResponseAssembler.cs
 
 **Checkpoint**: US3 independently functional and testable.
 

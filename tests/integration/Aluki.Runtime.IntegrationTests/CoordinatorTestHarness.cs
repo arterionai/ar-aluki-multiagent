@@ -66,6 +66,7 @@ internal static class CoordinatorTestHarness
             writeScopeDenied,
             writeRetry,
             new NullMediaDownloadQueue(),
+            new Aluki.Runtime.Capture.Memory.NoOpMemoryIngestionSink(),
             NullLogger<WhatsAppCaptureCoordinator>.Instance);
     }
 }
