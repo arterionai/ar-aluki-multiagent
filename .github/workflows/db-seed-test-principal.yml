@@ -90,12 +90,28 @@ jobs:
           insert into context_access (context_id, user_id, access_role)
             values ('33333333-3333-3333-3333-333333333333', '22222222-2222-2222-2222-222222222222', 'OWNER')
             on conflict (context_id, user_id) do nothing;
+
+          -- Real WhatsApp number for live end-to-end verification (wa_id 14252307522).
+          insert into tenants (id, tenant_type, display_name)
+            values ('44444444-4444-4444-4444-444444444444', 'INDIVIDUAL', 'Live WA Tenant')
+            on conflict (id) do nothing;
+          insert into users_profile (id, external_auth_id, phone)
+            values ('55555555-5555-5555-5555-555555555555', '14252307522', '14252307522')
+            on conflict (id) do nothing;
+          insert into memberships (tenant_id, user_id, role)
+            values ('44444444-4444-4444-4444-444444444444', '55555555-5555-5555-5555-555555555555', 'OWNER')
+            on conflict (tenant_id, user_id) do nothing;
+          insert into contexts (id, tenant_id, context_type, external_context_id, title)
+            values ('66666666-6666-6666-6666-666666666666', '44444444-4444-4444-4444-444444444444', 'DM', '14252307522', 'Live WA DM')
+            on conflict (id) do nothing;
+          insert into context_access (context_id, user_id, access_role)
+            values ('66666666-6666-6666-6666-666666666666', '55555555-5555-5555-5555-555555555555', 'OWNER')
+            on conflict (context_id, user_id) do nothing;
           SQL
 
-          echo "Seeded test principal:"
-          echo "  tenant_id  = 11111111-1111-1111-1111-111111111111"
-          echo "  context_id = 33333333-3333-3333-3333-333333333333"
-          echo "  sender     = e2e-smoke-sender"
+          echo "Seeded test principals:"
+          echo "  e2e:  tenant 11111111-... context 33333333-... sender e2e-smoke-sender"
+          echo "  live: tenant 44444444-... context 66666666-... sender 14252307522"
 
       - name: Remove database firewall rule
         if: always()
