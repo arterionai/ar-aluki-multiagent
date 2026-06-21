@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Aluki.Runtime.Memory.Embeddings;
 using Aluki.Runtime.Memory.Persistence;
+using Aluki.Runtime.Memory.Recall;
 using Aluki.Runtime.Memory.Security;
 using Aluki.Runtime.Memory.Skills;
 using Microsoft.Extensions.Logging;
@@ -22,6 +23,7 @@ public sealed class MemoryInteractionCoordinator
     private readonly MemoryScopeGuard _scopeGuard;
     private readonly MemoryStore _store;
     private readonly IEmbeddingClient _embeddingClient;
+    private readonly MemoryRecallService _recallService;
     private readonly ILogger<MemoryInteractionCoordinator> _logger;
 
     public MemoryInteractionCoordinator(
@@ -29,12 +31,14 @@ public sealed class MemoryInteractionCoordinator
         MemoryScopeGuard scopeGuard,
         MemoryStore store,
         IEmbeddingClient embeddingClient,
+        MemoryRecallService recallService,
         ILogger<MemoryInteractionCoordinator> logger)
     {
         _classifier = classifier;
         _scopeGuard = scopeGuard;
         _store = store;
         _embeddingClient = embeddingClient;
+        _recallService = recallService;
         _logger = logger;
     }
 
@@ -66,15 +70,8 @@ public sealed class MemoryInteractionCoordinator
         var intent = await _classifier.ClassifyAsync(request.InputText, cancellationToken);
         if (intent == MemoryIntent.RecallQuery)
         {
-            // US2 grounded recall is implemented in a follow-up; fail closed with
-            // an explicit no_result rather than fabricating an answer.
-            var recall = new RecallResult(
-                Confidence: null,
-                ClarificationQuestion: null,
-                NoResultReason: "no_evidence",
-                TopicGroups: [],
-                Claims: []);
-            return Ok(new MemoryInteractionResponse(correlationId, intent, MemoryStatus.NoResult, Recall: recall));
+            var outcome = await _recallService.RecallAsync(principal, request.InputText!, correlationId, cancellationToken);
+            return Ok(new MemoryInteractionResponse(correlationId, intent, outcome.Status, Recall: outcome.Recall));
         }
 
         var sourceChannel = request.SourceChannel!;

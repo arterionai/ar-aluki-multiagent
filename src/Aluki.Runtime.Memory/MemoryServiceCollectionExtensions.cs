@@ -1,6 +1,8 @@
 using Aluki.Runtime.Capture.Persistence;
 using Aluki.Runtime.Memory.Chat;
+using Aluki.Runtime.Memory.Configuration;
 using Aluki.Runtime.Memory.Embeddings;
+using Aluki.Runtime.Memory.Recall;
 using Aluki.Runtime.Memory.Persistence;
 using Aluki.Runtime.Memory.Security;
 using Aluki.Runtime.Memory.Skills;
@@ -23,7 +25,10 @@ public static class MemoryServiceCollectionExtensions
         services.AddSingleton<MemoryIntentClassifierSkill>();
         services.AddSingleton<MemoryScopeGuard>();
         services.AddSingleton<MemoryStore>();
+        services.AddSingleton<MemoryRecallService>();
         services.AddSingleton<MemoryInteractionCoordinator>();
+
+        services.Configure<MemoryOptions>(configuration.GetSection(MemoryOptions.SectionName));
 
         return services;
     }

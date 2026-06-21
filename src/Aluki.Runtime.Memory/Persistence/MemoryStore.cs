@@ -1,4 +1,5 @@
 using Aluki.Runtime.Capture.Persistence;
+using Aluki.Runtime.Memory.Recall;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -91,6 +92,117 @@ public sealed class MemoryStore
 
         await transaction.CommitAsync(cancellationToken);
         return result;
+    }
+
+    /// <summary>
+    /// Vector search over non-deleted, in-context memory artifacts ordered by
+    /// cosine distance to the query embedding (RLS enforces tenant scope).
+    /// </summary>
+    public async Task<IReadOnlyList<RecallCandidate>> SearchAsync(
+        PrincipalScope principal,
+        float[] queryEmbedding,
+        int topK,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await ScopedSessionContextSetter.ApplyAsync(connection, transaction, principal.TenantId, principal.UserId, cancellationToken);
+
+        await using var command = new NpgsqlCommand(
+            """
+            select memory_artifact_id, content_text, provenance_ref, (embedding <=> @q::vector) as dist
+            from memory_artifact
+            where context_id = @context and deleted_at_utc is null and embedding is not null
+            order by embedding <=> @q::vector
+            limit @k;
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("context", principal.ContextId);
+        command.Parameters.Add(new NpgsqlParameter("q", NpgsqlDbType.Text)
+        {
+            Value = Aluki.Runtime.Memory.Embeddings.AzureOpenAIEmbeddingClient.ToVectorLiteral(queryEmbedding)
+        });
+        command.Parameters.AddWithValue("k", topK);
+
+        var results = new List<RecallCandidate>(topK);
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                results.Add(new RecallCandidate(
+                    ArtifactId: reader.GetGuid(0),
+                    ContentText: reader.IsDBNull(1) ? null : reader.GetString(1),
+                    ProvenanceRef: reader.GetString(2),
+                    Distance: reader.GetDouble(3)));
+            }
+        }
+
+        await transaction.RollbackAsync(cancellationToken);
+        return results;
+    }
+
+    /// <summary>
+    /// True when deleted artifacts within relevance distance exist for the query —
+    /// used to signal a deletion-caused evidence gap rather than no evidence.
+    /// </summary>
+    public async Task<bool> HasDeletedRelevantAsync(
+        PrincipalScope principal,
+        float[] queryEmbedding,
+        double maxDistance,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await ScopedSessionContextSetter.ApplyAsync(connection, transaction, principal.TenantId, principal.UserId, cancellationToken);
+
+        await using var command = new NpgsqlCommand(
+            """
+            select exists (
+                select 1 from memory_artifact
+                where context_id = @context and deleted_at_utc is not null and embedding is not null
+                  and (embedding <=> @q::vector) <= @maxd
+            );
+            """,
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("context", principal.ContextId);
+        command.Parameters.Add(new NpgsqlParameter("q", NpgsqlDbType.Text)
+        {
+            Value = Aluki.Runtime.Memory.Embeddings.AzureOpenAIEmbeddingClient.ToVectorLiteral(queryEmbedding)
+        });
+        command.Parameters.AddWithValue("maxd", maxDistance);
+
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        await transaction.RollbackAsync(cancellationToken);
+        return result is bool b && b;
+    }
+
+    /// <summary>Records a recall outcome audit under the principal's scope.</summary>
+    public async Task WriteRecallAuditAsync(
+        PrincipalScope principal,
+        string eventName,
+        string resultText,
+        string correlationId,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await ScopedSessionContextSetter.ApplyAsync(connection, transaction, principal.TenantId, principal.UserId, cancellationToken);
+
+        await WriteAuditAsync(
+            connection,
+            transaction,
+            eventName: eventName,
+            tenantId: principal.TenantId,
+            contextId: principal.ContextId,
+            userId: principal.UserId,
+            skillName: "MemoryRecallSkill",
+            resultText: resultText,
+            correlationId: correlationId,
+            cancellationToken: cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     /// <summary>
