@@ -1,0 +1,108 @@
+name: DB Seed Test Principal
+
+# Manual, idempotent seeding of a disposable test tenant/user/context into the
+# dev database so the deployed capture endpoint can be exercised end-to-end
+# (accepted + duplicate-suppressed). Safe to re-run; uses fixed UUIDs.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: ar-Aluki
+  KEYVAULT_NAME: kvaralukidev6155
+  POSTGRES_SERVER_NAME: pg-araluki-dev-6155
+  POSTGRES_SECRET_NAME: PostgresConnectionString
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Open database firewall for runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER_IP="$(curl -s https://api.ipify.org)"
+          az postgres flexible-server firewall-rule create \
+            --resource-group "$RESOURCE_GROUP" \
+            --server-name "$POSTGRES_SERVER_NAME" \
+            --name "ghseed-${{ github.run_id }}" \
+            --start-ip-address "$RUNNER_IP" \
+            --end-ip-address "$RUNNER_IP" \
+            --output none
+
+      - name: Seed test principal
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONN="$(az keyvault secret show --vault-name "$KEYVAULT_NAME" --name "$POSTGRES_SECRET_NAME" --query value -o tsv)"
+          echo "::add-mask::$CONN"
+          CONN_LINES="${CONN//;/$'\n'}"
+          while IFS= read -r pair; do
+            [ -z "$pair" ] && continue
+            key="$(printf '%s' "${pair%%=*}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            val="$(printf '%s' "${pair#*=}" | sed 's/^[[:space:]]*//')"
+            case "$key" in
+              host|server) PGHOST="$val" ;;
+              port) PGPORT="$val" ;;
+              database|"database name"|db) PGDATABASE="$val" ;;
+              username|"user id"|user|uid) PGUSER="$val" ;;
+              password|pwd) PGPASSWORD="$val" ;;
+              "ssl mode"|sslmode) PGSSLMODE_RAW="$val" ;;
+            esac
+          done <<< "$CONN_LINES"
+          export PGHOST PGDATABASE PGUSER PGPASSWORD
+          export PGPORT="${PGPORT:-5432}"
+          case "$(printf '%s' "${PGSSLMODE_RAW:-Require}" | tr '[:upper:]' '[:lower:]')" in
+            disable) export PGSSLMODE="disable" ;;
+            *) export PGSSLMODE="require" ;;
+          esac
+          echo "::add-mask::$PGPASSWORD"
+
+          psql -v ON_ERROR_STOP=1 -1 <<'SQL'
+          insert into tenants (id, tenant_type, display_name)
+            values ('11111111-1111-1111-1111-111111111111', 'INDIVIDUAL', 'E2E Smoke Tenant')
+            on conflict (id) do nothing;
+          insert into users_profile (id, external_auth_id, phone)
+            values ('22222222-2222-2222-2222-222222222222', 'e2e-smoke-sender', 'e2e-smoke-sender')
+            on conflict (id) do nothing;
+          insert into memberships (tenant_id, user_id, role)
+            values ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', 'OWNER')
+            on conflict (tenant_id, user_id) do nothing;
+          insert into contexts (id, tenant_id, context_type, external_context_id, title)
+            values ('33333333-3333-3333-3333-333333333333', '11111111-1111-1111-1111-111111111111', 'DM', 'e2e-smoke-sender', 'E2E Smoke DM')
+            on conflict (id) do nothing;
+          insert into context_access (context_id, user_id, access_role)
+            values ('33333333-3333-3333-3333-333333333333', '22222222-2222-2222-2222-222222222222', 'OWNER')
+            on conflict (context_id, user_id) do nothing;
+          SQL
+
+          echo "Seeded test principal:"
+          echo "  tenant_id  = 11111111-1111-1111-1111-111111111111"
+          echo "  context_id = 33333333-3333-3333-3333-333333333333"
+          echo "  sender     = e2e-smoke-sender"
+
+      - name: Remove database firewall rule
+        if: always()
+        shell: bash
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group "$RESOURCE_GROUP" \
+            --server-name "$POSTGRES_SERVER_NAME" \
+            --name "ghseed-${{ github.run_id }}" \
+            --yes --output none || true
