@@ -7,6 +7,7 @@ using Aluki.Runtime.Host.Skills.Feedback;
 using Aluki.Runtime.Host.Skills.Governance;
 using Aluki.Runtime.Host.Skills.SemanticGraph;
 using Aluki.Runtime.Host.Skills.SuggestionsAdmin;
+using Aluki.Runtime.Conversation;
 using Aluki.Runtime.Memory;
 using Aluki.Runtime.DelegatedReminders;
 using Aluki.Runtime.Reminders;
@@ -26,6 +27,7 @@ var host = new HostBuilder()
         services.AddSuggestionsAdmin(context.Configuration);
         services.AddGovernance(context.Configuration);
         services.AddSemanticGraph(context.Configuration);
+        services.AddConversationalResponse(context.Configuration);
 
         // Outbound delivery feedback (read receipt + typing indicator) via Graph API.
         services.AddHttpClient<IWhatsAppMessenger, MetaWhatsAppMessenger>();

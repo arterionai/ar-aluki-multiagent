@@ -1,4 +1,5 @@
 using Aluki.Runtime.Capture;
+using Aluki.Runtime.Conversation;
 using Aluki.Runtime.Host;
 using Aluki.Runtime.Host.Calendar;
 using Aluki.Runtime.Host.Skills.Feedback;
@@ -51,6 +52,9 @@ builder.Services.AddGovernance(builder.Configuration);
 
 // Semantic Graph (SB-011): entity resolution, relationship extraction, graph traversal.
 builder.Services.AddSemanticGraph(builder.Configuration);
+
+// Core Conversational Response (SB-000): respond to every WhatsApp message.
+builder.Services.AddConversationalResponse(builder.Configuration);
 
 // Background heartbeat (existing runtime worker)
 builder.Services.AddHostedService<Worker>();
