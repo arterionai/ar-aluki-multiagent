@@ -24,6 +24,28 @@ documented intended behaviors without explicit instruction.
 - **SB-003 Calendar Integration** — done (merged to `main`, commit `354e612`;
   not separately tracked in this section before). Google + Outlook providers,
   connect/disconnect/create skills, callback security, `008_calendar_integration.sql`.
+  - **Real OAuth token exchange + provider calls** (closes the previously-stubbed
+    gap vs spec FR-007/SC-013): the callback now exchanges the authorization `code`
+    for access/refresh tokens via the provider token endpoint (`IOAuthTokenExchanger`,
+    Outlook + Google), resolves the account ref (Graph `/me` · Google `userinfo`), and
+    persists tokens **encrypted at rest** (AES-256-GCM, `ICalendarTokenProtector`) in
+    `calendar_oauth_tokens` (migration `010_calendar_oauth_tokens.sql`).
+    `CalendarTokenService` returns a valid access token, refreshing on expiry and
+    signalling reconnect when refresh is unavailable/denied. Provider adapters
+    (`OutlookCalendarProvider`/`GoogleCalendarProvider`) now POST real events via
+    Microsoft Graph (`/me/events`) and Google Calendar (`/calendars/primary/events`);
+    401/403 ⇒ `reconnect_required`, no partial side effects, token material never
+    surfaced (wrapped in `ProviderTokenBoundary`).
+  - **Config** (Key Vault references in deployed env): `Calendar:CallbackBaseUrl`,
+    `Calendar:TokenEncryptionKey` (base64 32-byte AES key),
+    `Calendar:Outlook:{Enabled,ClientId,ClientSecret,TenantId,Scopes}`,
+    `Calendar:Google:{Enabled,ClientId,ClientSecret,Scopes}`. Register the redirect
+    URI `{CallbackBaseUrl}/api/calendar/callback` on each provider OAuth app (multiple
+    URIs allowed: localhost for Host-local testing + the deployed URL).
+  - **Still in Host only (not deployed)**: the calendar engine lives in
+    `Aluki.Runtime.Host`; there is no calendar HTTP Function in the deployed worker
+    yet. Exposing it in `Aluki.Runtime.Functions` (extract to a shared lib + HTTP
+    triggers) remains a follow-up before prod use.
 - **SB-004 AI Extraction** — US1/US2/US3 done (not yet deployed). Project
   `Aluki.Runtime.Extraction` (mirrors `Memory`). Migration `009_ai_extraction.sql`
   (jobs/results/fields/audit + tenant RLS). US1 (audio→transcription+structured
@@ -81,10 +103,12 @@ Directive: ALL AI inference goes through Azure OpenAI or Azure AI Foundry.
   `migrate-database` (opens PG firewall, applies migrations via a
   `schema_migrations` ledger, closes firewall) → `deploy-function` (OIDC).
 - **IMPORTANT**: the migrate-database step iterates an **explicit, hardcoded list**
-  of migration filenames (the `for f in 001_… 009_…` loop), NOT a glob. Every new
+  of migration filenames (the `for f in 001_… 010_…` loop), NOT a glob. Every new
   `db/migrations/NNN_*.sql` MUST be appended to that loop AND to the test fixture
   list in `tests/integration/.../DbCaptureFixture.cs`, or it silently never runs.
-  (This is why SB-003/SB-004's `008/009` migrations were not applied until added.)
+  (This is why SB-003/SB-004's `008/009` migrations were not applied until added;
+  `010_calendar_oauth_tokens` is wired into both, and `008` was also back-filled into
+  the fixture since `010` has an FK to `calendar_connections`.)
 - DB migrations run as part of deploy. pgcrypto is NOT allow-listed on Azure —
   use core `gen_random_uuid()` (PG16), do not `create extension pgcrypto`.
 - App settings use Key Vault references; Postgres connection string app setting is

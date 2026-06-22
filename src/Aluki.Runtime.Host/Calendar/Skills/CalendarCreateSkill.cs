@@ -173,6 +173,9 @@ public sealed class CalendarCreateSkill
             EndUtc: endUtc,
             Timezone: timezone.IanaId!,
             ProviderAccountRef: connection.ProviderAccountRef ?? string.Empty,
+            TenantId: request.TenantId,
+            ContextId: request.ContextId,
+            UserId: request.UserId,
             CorrelationId: request.CorrelationId), ct);
 
         if (providerResult.ReconnectRequired)

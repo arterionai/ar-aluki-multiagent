@@ -1,24 +1,35 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 using Aluki.Runtime.Abstractions.Skills.Calendar;
-using Aluki.Runtime.Host.Calendar.Security;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Aluki.Runtime.Host.Calendar.Providers;
 
 /// <summary>
-/// Outlook provider adapter. Creates events via Microsoft Graph Calendar API.
-/// Token material is never exposed outside ProviderTokenBoundary; reconnect_required
-/// is returned on authorization errors without partial side effects.
+/// Outlook calendar provider adapter. Creates events via Microsoft Graph
+/// (<c>POST /me/events</c>) using the connection's stored OAuth token, refreshed on
+/// demand. Authorization failures surface as <c>reconnect_required</c> with no partial
+/// side effects; token material is never exposed outside <c>ProviderTokenBoundary</c>.
 /// </summary>
 public sealed class OutlookCalendarProvider : ICalendarProvider
 {
     public CalendarProvider Provider => CalendarProvider.Outlook;
 
+    private readonly HttpClient _http;
+    private readonly ICalendarTokenService _tokenService;
     private readonly IOptions<CalendarOptions> _options;
     private readonly ILogger<OutlookCalendarProvider> _logger;
 
-    public OutlookCalendarProvider(IOptions<CalendarOptions> options, ILogger<OutlookCalendarProvider> logger)
+    public OutlookCalendarProvider(
+        HttpClient http,
+        ICalendarTokenService tokenService,
+        IOptions<CalendarOptions> options,
+        ILogger<OutlookCalendarProvider> logger)
     {
+        _http = http;
+        _tokenService = tokenService;
         _options = options;
         _logger = logger;
     }
@@ -27,43 +38,59 @@ public sealed class OutlookCalendarProvider : ICalendarProvider
     {
         if (!_options.Value.Outlook.Enabled)
         {
-            // Provider not configured — signal reconnect so the caller can surface the issue
             _logger.LogWarning("Outlook provider is not enabled. Returning reconnect_required. correlation={CorrelationId}", request.CorrelationId);
-            return new ProviderCreateResult(Success: false, ProviderEventRef: null, ReconnectRequired: true,
-                ErrorMessage: "Outlook provider is not configured.");
+            return new ProviderCreateResult(false, null, ReconnectRequired: true, "Outlook provider is not configured.");
         }
+
+        var token = await _tokenService.GetValidAccessTokenAsync(
+            request.TenantId, request.ContextId, request.UserId, Provider, ct);
+        if (token is null)
+            return new ProviderCreateResult(false, null, ReconnectRequired: true,
+                "Authorization expired or revoked. Please reconnect your Outlook account.");
+
+        // Send times in UTC so Graph stores an unambiguous instant regardless of DST.
+        var payload = new
+        {
+            subject = request.Title,
+            start = new { dateTime = request.StartUtc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss"), timeZone = "UTC" },
+            end = new { dateTime = request.EndUtc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss"), timeZone = "UTC" },
+        };
 
         try
         {
-            // Real implementation: obtain token via ProviderTokenBoundary, build GraphServiceClient,
-            // POST /me/events with title/start/end/timezone, return event.Id as ProviderEventRef.
-            // Token exchange requires Key Vault-backed credentials (available in deployed env).
-            //
-            // Stub: generates a deterministic event ref for integration test use when enabled.
-            var eventRef = $"outlook-event-{Guid.NewGuid():N}";
+            using var msg = new HttpRequestMessage(HttpMethod.Post, "https://graph.microsoft.com/v1.0/me/events")
+            {
+                Content = JsonContent.Create(payload),
+            };
+            msg.Headers.Authorization = new("Bearer", token.Unwrap());
 
-            _logger.LogInformation("Outlook event created. event_ref={EventRef} correlation={CorrelationId}",
-                eventRef, request.CorrelationId);
+            using var resp = await _http.SendAsync(msg, ct);
 
-            await Task.CompletedTask;
-            return new ProviderCreateResult(Success: true, ProviderEventRef: eventRef, ReconnectRequired: false, ErrorMessage: null);
-        }
-        catch (Exception ex) when (IsAuthorizationError(ex))
-        {
-            _logger.LogWarning(ex, "Outlook authorization failure. correlation={CorrelationId}", request.CorrelationId);
-            return new ProviderCreateResult(Success: false, ProviderEventRef: null, ReconnectRequired: true,
-                ErrorMessage: "Authorization expired or revoked. Please reconnect your Outlook account.");
+            if (resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                _logger.LogWarning("Graph returned {Status}; reconnect required. correlation={CorrelationId}", (int)resp.StatusCode, request.CorrelationId);
+                return new ProviderCreateResult(false, null, ReconnectRequired: true,
+                    "Authorization expired or revoked. Please reconnect your Outlook account.");
+            }
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.LogError("Graph create event failed: {Status}. correlation={CorrelationId}", (int)resp.StatusCode, request.CorrelationId);
+                return new ProviderCreateResult(false, null, ReconnectRequired: false, $"Graph error {(int)resp.StatusCode}.");
+            }
+
+            var body = await resp.Content.ReadFromJsonAsync<JsonElement>(ct);
+            var eventRef = body.TryGetProperty("id", out var id) ? id.GetString() : null;
+            if (string.IsNullOrEmpty(eventRef))
+                return new ProviderCreateResult(false, null, ReconnectRequired: false, "Graph response missing event id.");
+
+            _logger.LogInformation("Outlook event created. correlation={CorrelationId}", request.CorrelationId);
+            return new ProviderCreateResult(true, eventRef, ReconnectRequired: false, null);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Outlook create event failed. correlation={CorrelationId}", request.CorrelationId);
-            return new ProviderCreateResult(Success: false, ProviderEventRef: null, ReconnectRequired: false,
-                ErrorMessage: ex.Message);
+            return new ProviderCreateResult(false, null, ReconnectRequired: false, ex.Message);
         }
     }
-
-    private static bool IsAuthorizationError(Exception ex) =>
-        ex.Message.Contains("401", StringComparison.Ordinal) ||
-        ex.Message.Contains("InvalidAuthenticationToken", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("token", StringComparison.OrdinalIgnoreCase);
 }

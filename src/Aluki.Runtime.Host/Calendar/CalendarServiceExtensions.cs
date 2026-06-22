@@ -23,17 +23,26 @@ internal static class CalendarServiceExtensions
         services.AddScoped<IDeduplicationRepository>(sp => sp.GetRequiredService<PostgresCalendarRepository>());
         services.AddScoped<ICalendarOutcomeRepository>(sp => sp.GetRequiredService<PostgresCalendarRepository>());
         services.AddScoped<ICalendarAuditRepository, PostgresCalendarAuditRepository>();
+        services.AddScoped<ICalendarTokenStore, PostgresCalendarTokenStore>();
 
         // Security + observability
         services.AddScoped<ICalendarScopeGuard, DefaultCalendarScopeGuard>();
         services.AddScoped<CalendarAuditWriter>();
         services.AddScoped<CalendarAuthorizationAuditSkill>();
         services.AddSingleton<CalendarTelemetry>();
+        services.AddSingleton<ICalendarTokenProtector, AesGcmCalendarTokenProtector>();
 
-        // Provider adapters
-        services.AddScoped<OutlookCalendarProvider>();
+        // OAuth token exchange (code↔token, refresh, account resolution) — one per provider.
+        services.AddHttpClient<OutlookOAuthTokenExchanger>();
+        services.AddScoped<IOAuthTokenExchanger>(sp => sp.GetRequiredService<OutlookOAuthTokenExchanger>());
+        services.AddHttpClient<GoogleOAuthTokenExchanger>();
+        services.AddScoped<IOAuthTokenExchanger>(sp => sp.GetRequiredService<GoogleOAuthTokenExchanger>());
+        services.AddScoped<ICalendarTokenService, CalendarTokenService>();
+
+        // Provider adapters (typed HttpClients so they call the real Graph/Google APIs).
+        services.AddHttpClient<OutlookCalendarProvider>();
         services.AddScoped<ICalendarProvider>(sp => sp.GetRequiredService<OutlookCalendarProvider>());
-        services.AddScoped<GoogleCalendarProvider>();
+        services.AddHttpClient<GoogleCalendarProvider>();
         services.AddScoped<ICalendarProvider>(sp => sp.GetRequiredService<GoogleCalendarProvider>());
 
         // Cross-cutting provider policy

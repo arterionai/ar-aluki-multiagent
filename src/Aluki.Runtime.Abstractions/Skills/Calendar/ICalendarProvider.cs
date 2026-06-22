@@ -12,6 +12,9 @@ public sealed record ProviderCreateRequest(
     DateTimeOffset EndUtc,
     string Timezone,
     string ProviderAccountRef,
+    Guid TenantId,
+    Guid ContextId,
+    Guid UserId,
     string CorrelationId);
 
 public sealed record ProviderCreateResult(

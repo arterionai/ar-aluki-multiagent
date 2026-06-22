@@ -1,3 +1,4 @@
+using System.Net;
 using Aluki.Runtime.Abstractions.Skills.Calendar;
 using Aluki.Runtime.Host.Calendar.Providers;
 using Aluki.Runtime.Host.Calendar.Skills;
@@ -10,8 +11,9 @@ namespace Aluki.Runtime.IntegrationTests;
 /// <summary>
 /// Integration tests for Google/Outlook provider parity (T032, FR-010, SC-008).
 /// Verifies that both adapters produce structurally equivalent results for the same
-/// scenario: disabled (reconnect_required), enabled (success + event ref), and
-/// auth-error detection. Uses CalendarProviderParityPolicy to enforce shape contracts.
+/// scenario: disabled (reconnect_required), not-connected (reconnect_required),
+/// connected+success (provider event ref), and auth-error (reconnect_required).
+/// Provider HTTP calls are stubbed; no live network or database is required.
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class CalendarGoogleParityIntegrationTests
@@ -24,6 +26,9 @@ public sealed class CalendarGoogleParityIntegrationTests
         EndUtc: DateTimeOffset.UtcNow.AddHours(2),
         Timezone: "America/New_York",
         ProviderAccountRef: "user@example.com",
+        TenantId: Guid.NewGuid(),
+        ContextId: Guid.NewGuid(),
+        UserId: Guid.NewGuid(),
         CorrelationId: Guid.NewGuid().ToString());
 
     // ── Disabled provider behavior ─────────────────────────────────────────
@@ -60,40 +65,90 @@ public sealed class CalendarGoogleParityIntegrationTests
         Assert.True(Policy.Validate(outlook).IsValid, string.Join("; ", Policy.Validate(outlook).Violations));
     }
 
-    // ── Enabled provider behavior ──────────────────────────────────────────
+    // ── No stored token → reconnect required ───────────────────────────────
 
     [Fact]
-    public async Task Google_enabled_returns_success_with_event_ref()
+    public async Task Google_enabled_without_token_returns_reconnect_required()
     {
-        var provider = BuildGoogleProvider(enabled: true);
+        var provider = BuildGoogleProvider(enabled: true, accessToken: null);
+        var result = await provider.CreateEventAsync(MakeRequest());
+
+        Assert.False(result.Success);
+        Assert.True(result.ReconnectRequired);
+    }
+
+    [Fact]
+    public async Task Outlook_enabled_without_token_returns_reconnect_required()
+    {
+        var provider = BuildOutlookProvider(enabled: true, accessToken: null);
+        var result = await provider.CreateEventAsync(MakeRequest());
+
+        Assert.False(result.Success);
+        Assert.True(result.ReconnectRequired);
+    }
+
+    // ── Connected + provider accepts → success with event ref ──────────────
+
+    [Fact]
+    public async Task Google_connected_returns_success_with_event_ref()
+    {
+        var provider = BuildGoogleProvider(enabled: true,
+            response: (HttpStatusCode.OK, """{"id":"google-evt-123"}"""));
         var result = await provider.CreateEventAsync(MakeRequest());
 
         Assert.True(result.Success);
         Assert.False(result.ReconnectRequired);
-        Assert.NotNull(result.ProviderEventRef);
-        Assert.StartsWith("google-event-", result.ProviderEventRef);
+        Assert.Equal("google-evt-123", result.ProviderEventRef);
     }
 
     [Fact]
-    public async Task Outlook_enabled_returns_success_with_event_ref()
+    public async Task Outlook_connected_returns_success_with_event_ref()
     {
-        var provider = BuildOutlookProvider(enabled: true);
+        var provider = BuildOutlookProvider(enabled: true,
+            response: (HttpStatusCode.Created, """{"id":"outlook-evt-456"}"""));
         var result = await provider.CreateEventAsync(MakeRequest());
 
         Assert.True(result.Success);
         Assert.False(result.ReconnectRequired);
-        Assert.NotNull(result.ProviderEventRef);
-        Assert.StartsWith("outlook-event-", result.ProviderEventRef);
+        Assert.Equal("outlook-evt-456", result.ProviderEventRef);
     }
 
     [Fact]
-    public async Task Both_providers_enabled_produce_parity_valid_results()
+    public async Task Both_providers_connected_produce_parity_valid_results()
     {
-        var google = await BuildGoogleProvider(enabled: true).CreateEventAsync(MakeRequest());
-        var outlook = await BuildOutlookProvider(enabled: true).CreateEventAsync(MakeRequest());
+        var google = await BuildGoogleProvider(enabled: true,
+            response: (HttpStatusCode.OK, """{"id":"g1"}""")).CreateEventAsync(MakeRequest());
+        var outlook = await BuildOutlookProvider(enabled: true,
+            response: (HttpStatusCode.Created, """{"id":"o1"}""")).CreateEventAsync(MakeRequest());
 
         Assert.True(Policy.Validate(google).IsValid, string.Join("; ", Policy.Validate(google).Violations));
         Assert.True(Policy.Validate(outlook).IsValid, string.Join("; ", Policy.Validate(outlook).Violations));
+    }
+
+    // ── Authorization failure → reconnect required ─────────────────────────
+
+    [Fact]
+    public async Task Google_unauthorized_returns_reconnect_required()
+    {
+        var provider = BuildGoogleProvider(enabled: true,
+            response: (HttpStatusCode.Unauthorized, """{"error":"invalid_token"}"""));
+        var result = await provider.CreateEventAsync(MakeRequest());
+
+        Assert.False(result.Success);
+        Assert.True(result.ReconnectRequired);
+        Assert.Null(result.ProviderEventRef);
+    }
+
+    [Fact]
+    public async Task Outlook_unauthorized_returns_reconnect_required()
+    {
+        var provider = BuildOutlookProvider(enabled: true,
+            response: (HttpStatusCode.Unauthorized, """{"error":"InvalidAuthenticationToken"}"""));
+        var result = await provider.CreateEventAsync(MakeRequest());
+
+        Assert.False(result.Success);
+        Assert.True(result.ReconnectRequired);
+        Assert.Null(result.ProviderEventRef);
     }
 
     // ── Provider identity ──────────────────────────────────────────────────
@@ -116,45 +171,33 @@ public sealed class CalendarGoogleParityIntegrationTests
         Assert.NotEqual(BuildGoogleProvider(true).Provider, BuildOutlookProvider(true).Provider);
     }
 
-    // ── Idempotency: each call produces a unique event ref ────────────────
-
-    [Fact]
-    public async Task Google_each_create_produces_unique_event_ref()
-    {
-        var provider = BuildGoogleProvider(enabled: true);
-        var r1 = await provider.CreateEventAsync(MakeRequest());
-        var r2 = await provider.CreateEventAsync(MakeRequest());
-
-        Assert.NotEqual(r1.ProviderEventRef, r2.ProviderEventRef);
-    }
-
-    [Fact]
-    public async Task Outlook_each_create_produces_unique_event_ref()
-    {
-        var provider = BuildOutlookProvider(enabled: true);
-        var r1 = await provider.CreateEventAsync(MakeRequest());
-        var r2 = await provider.CreateEventAsync(MakeRequest());
-
-        Assert.NotEqual(r1.ProviderEventRef, r2.ProviderEventRef);
-    }
-
     // ── Helpers ────────────────────────────────────────────────────────────
 
-    private static GoogleCalendarProvider BuildGoogleProvider(bool enabled)
+    private static GoogleCalendarProvider BuildGoogleProvider(
+        bool enabled,
+        string? accessToken = "access-xyz",
+        (HttpStatusCode Status, string Json)? response = null)
     {
         var opts = Options.Create(new Host.Calendar.CalendarOptions
         {
             Google = new Host.Calendar.GoogleProviderOptions { Enabled = enabled }
         });
-        return new GoogleCalendarProvider(opts, NullLogger<GoogleCalendarProvider>.Instance);
+        var r = response ?? (HttpStatusCode.OK, """{"id":"g"}""");
+        var http = new HttpClient(new StubHttpMessageHandler(r.Status, r.Json));
+        return new GoogleCalendarProvider(http, new FakeCalendarTokenService(accessToken), opts, NullLogger<GoogleCalendarProvider>.Instance);
     }
 
-    private static OutlookCalendarProvider BuildOutlookProvider(bool enabled)
+    private static OutlookCalendarProvider BuildOutlookProvider(
+        bool enabled,
+        string? accessToken = "access-xyz",
+        (HttpStatusCode Status, string Json)? response = null)
     {
         var opts = Options.Create(new Host.Calendar.CalendarOptions
         {
             Outlook = new Host.Calendar.OutlookProviderOptions { Enabled = enabled }
         });
-        return new OutlookCalendarProvider(opts, NullLogger<OutlookCalendarProvider>.Instance);
+        var r = response ?? (HttpStatusCode.Created, """{"id":"o"}""");
+        var http = new HttpClient(new StubHttpMessageHandler(r.Status, r.Json));
+        return new OutlookCalendarProvider(http, new FakeCalendarTokenService(accessToken), opts, NullLogger<OutlookCalendarProvider>.Instance);
     }
 }

@@ -22,9 +22,16 @@ public sealed class CalendarCallbackSecurityIntegrationTests
         var telemetry = new CalendarTelemetry(NullLogger<CalendarTelemetry>.Instance);
         var auditRepo = new NullCalendarAuditRepository();
         var auditWriter = new CalendarAuditWriter(auditRepo, NullLogger<CalendarAuditWriter>.Instance);
+        var exchangers = new[]
+        {
+            new FakeOAuthTokenExchanger(CalendarProvider.Outlook),
+            new FakeOAuthTokenExchanger(CalendarProvider.Google),
+        };
         return new CalendarCallbackSkill(
             callbackRepo ?? new InMemoryCallbackStateRepository(),
             connectionRepo ?? new InMemoryConnectionRepository(),
+            exchangers,
+            new FakeCalendarTokenService(),
             auditWriter,
             telemetry);
     }

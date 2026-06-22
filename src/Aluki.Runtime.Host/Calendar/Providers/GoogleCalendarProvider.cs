@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 using Aluki.Runtime.Abstractions.Skills.Calendar;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -5,19 +8,29 @@ using Microsoft.Extensions.Options;
 namespace Aluki.Runtime.Host.Calendar.Providers;
 
 /// <summary>
-/// Google Calendar provider adapter. Creates events via the Google Calendar API v3.
-/// Behavior is equivalent to OutlookCalendarProvider: reconnect_required on auth
-/// failures, no partial side effects, token material never exposed.
+/// Google calendar provider adapter. Creates events via the Google Calendar API v3
+/// (<c>POST /calendars/primary/events</c>) using the connection's stored OAuth token,
+/// refreshed on demand. Behavior mirrors <see cref="OutlookCalendarProvider"/>:
+/// reconnect_required on authorization failures, no partial side effects, token
+/// material never exposed.
 /// </summary>
 public sealed class GoogleCalendarProvider : ICalendarProvider
 {
     public CalendarProvider Provider => CalendarProvider.Google;
 
+    private readonly HttpClient _http;
+    private readonly ICalendarTokenService _tokenService;
     private readonly IOptions<CalendarOptions> _options;
     private readonly ILogger<GoogleCalendarProvider> _logger;
 
-    public GoogleCalendarProvider(IOptions<CalendarOptions> options, ILogger<GoogleCalendarProvider> logger)
+    public GoogleCalendarProvider(
+        HttpClient http,
+        ICalendarTokenService tokenService,
+        IOptions<CalendarOptions> options,
+        ILogger<GoogleCalendarProvider> logger)
     {
+        _http = http;
+        _tokenService = tokenService;
         _options = options;
         _logger = logger;
     }
@@ -27,42 +40,59 @@ public sealed class GoogleCalendarProvider : ICalendarProvider
         if (!_options.Value.Google.Enabled)
         {
             _logger.LogWarning("Google provider is not enabled. Returning reconnect_required. correlation={CorrelationId}", request.CorrelationId);
-            return new ProviderCreateResult(Success: false, ProviderEventRef: null, ReconnectRequired: true,
-                ErrorMessage: "Google provider is not configured.");
+            return new ProviderCreateResult(false, null, ReconnectRequired: true, "Google provider is not configured.");
         }
+
+        var token = await _tokenService.GetValidAccessTokenAsync(
+            request.TenantId, request.ContextId, request.UserId, Provider, ct);
+        if (token is null)
+            return new ProviderCreateResult(false, null, ReconnectRequired: true,
+                "Authorization expired or revoked. Please reconnect your Google account.");
+
+        // RFC3339 UTC instants are unambiguous and accepted by the Calendar API.
+        var payload = new
+        {
+            summary = request.Title,
+            start = new { dateTime = request.StartUtc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss'Z'") },
+            end = new { dateTime = request.EndUtc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss'Z'") },
+        };
 
         try
         {
-            // Real implementation: obtain OAuth token via ProviderTokenBoundary,
-            // build CalendarService with UserCredential, POST events via
-            // service.Events.Insert(event, "primary").ExecuteAsync().
-            // Token exchange requires Key Vault-backed credentials (available in deployed env).
-            //
-            // Stub: generates a deterministic event ref for integration test use when enabled.
-            var eventRef = $"google-event-{Guid.NewGuid():N}";
+            using var msg = new HttpRequestMessage(HttpMethod.Post,
+                "https://www.googleapis.com/calendar/v3/calendars/primary/events")
+            {
+                Content = JsonContent.Create(payload),
+            };
+            msg.Headers.Authorization = new("Bearer", token.Unwrap());
 
-            _logger.LogInformation("Google Calendar event created. event_ref={EventRef} correlation={CorrelationId}",
-                eventRef, request.CorrelationId);
+            using var resp = await _http.SendAsync(msg, ct);
 
-            await Task.CompletedTask;
-            return new ProviderCreateResult(Success: true, ProviderEventRef: eventRef, ReconnectRequired: false, ErrorMessage: null);
-        }
-        catch (Exception ex) when (IsAuthorizationError(ex))
-        {
-            _logger.LogWarning(ex, "Google authorization failure. correlation={CorrelationId}", request.CorrelationId);
-            return new ProviderCreateResult(Success: false, ProviderEventRef: null, ReconnectRequired: true,
-                ErrorMessage: "Authorization expired or revoked. Please reconnect your Google account.");
+            if (resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                _logger.LogWarning("Google API returned {Status}; reconnect required. correlation={CorrelationId}", (int)resp.StatusCode, request.CorrelationId);
+                return new ProviderCreateResult(false, null, ReconnectRequired: true,
+                    "Authorization expired or revoked. Please reconnect your Google account.");
+            }
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.LogError("Google create event failed: {Status}. correlation={CorrelationId}", (int)resp.StatusCode, request.CorrelationId);
+                return new ProviderCreateResult(false, null, ReconnectRequired: false, $"Google Calendar error {(int)resp.StatusCode}.");
+            }
+
+            var body = await resp.Content.ReadFromJsonAsync<JsonElement>(ct);
+            var eventRef = body.TryGetProperty("id", out var id) ? id.GetString() : null;
+            if (string.IsNullOrEmpty(eventRef))
+                return new ProviderCreateResult(false, null, ReconnectRequired: false, "Google response missing event id.");
+
+            _logger.LogInformation("Google event created. correlation={CorrelationId}", request.CorrelationId);
+            return new ProviderCreateResult(true, eventRef, ReconnectRequired: false, null);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Google create event failed. correlation={CorrelationId}", request.CorrelationId);
-            return new ProviderCreateResult(Success: false, ProviderEventRef: null, ReconnectRequired: false,
-                ErrorMessage: ex.Message);
+            return new ProviderCreateResult(false, null, ReconnectRequired: false, ex.Message);
         }
     }
-
-    private static bool IsAuthorizationError(Exception ex) =>
-        ex.Message.Contains("401", StringComparison.Ordinal) ||
-        ex.Message.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("Token has been expired", StringComparison.OrdinalIgnoreCase);
 }
