@@ -14,6 +14,7 @@ namespace Aluki.Runtime.Capture.Channels.WhatsApp;
 public interface IWhatsAppMessenger
 {
     Task MarkReadAndShowTypingAsync(string phoneNumberId, string messageId, CancellationToken cancellationToken);
+    Task SendTextMessageAsync(string phoneNumberId, string recipientWaId, string text, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -69,11 +70,47 @@ public sealed class MetaWhatsAppMessenger : IWhatsAppMessenger
                 (int)response.StatusCode, messageId, detail);
         }
     }
+
+    public async Task SendTextMessageAsync(string phoneNumberId, string recipientWaId, string text, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(_accessToken) || string.IsNullOrWhiteSpace(phoneNumberId) || string.IsNullOrWhiteSpace(recipientWaId))
+        {
+            return;
+        }
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            messaging_product = "whatsapp",
+            to = recipientWaId,
+            type = "text",
+            text = new { body = text }
+        });
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_graphBaseUrl}/{phoneNumberId}/messages")
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+
+        using var response = await _http.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var detail = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogWarning(
+                "WhatsApp send text failed. status={Status} recipient={Recipient} detail={Detail}",
+                (int)response.StatusCode, recipientWaId, detail);
+            throw new InvalidOperationException(
+                $"WhatsApp send text failed with status {(int)response.StatusCode}: {detail}");
+        }
+    }
 }
 
 /// <summary>No-op messenger used when outbound feedback is not configured (Host, tests).</summary>
 public sealed class NullWhatsAppMessenger : IWhatsAppMessenger
 {
     public Task MarkReadAndShowTypingAsync(string phoneNumberId, string messageId, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
+    public Task SendTextMessageAsync(string phoneNumberId, string recipientWaId, string text, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 }

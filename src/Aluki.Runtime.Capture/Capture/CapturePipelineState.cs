@@ -1,4 +1,5 @@
 using Aluki.Runtime.Abstractions.Channels.WhatsApp;
+using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Persistence;
 using Aluki.Runtime.Abstractions.Security;
 
@@ -33,6 +34,9 @@ public sealed class CapturePipelineState
         $"{Principal.TenantId:D}|{SourceChannel}|{Envelope.ProviderMessageId}";
 
     public NormalizedCaptureMessage? Normalized { get; set; }
+
+    /// <summary>Channel-agnostic representation produced by normalization for downstream dispatch.</summary>
+    public UnifiedMessage? UnifiedMessage { get; set; }
 
     /// <summary>Active scoped transaction for the current persistence attempt.</summary>
     public ICaptureUnitOfWork? UnitOfWork { get; set; }

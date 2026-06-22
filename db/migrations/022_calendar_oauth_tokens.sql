@@ -1,4 +1,4 @@
--- 010_calendar_oauth_tokens.sql
+-- 022_calendar_oauth_tokens.sql
 -- SB-003 calendar integration follow-up: persist OAuth access/refresh tokens so the
 -- connect flow yields a usable session and provider adapters can call the real
 -- Microsoft Graph / Google Calendar APIs (FR-007, token refresh flows).

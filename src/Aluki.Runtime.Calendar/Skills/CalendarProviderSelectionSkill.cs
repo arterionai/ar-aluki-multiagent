@@ -18,13 +18,17 @@ public sealed class CalendarProviderSelectionSkill
         if (activeConnections.Count == 0)
             return ProviderSelectionResult.NoProvider;
 
-        // 1. Explicit hint
+        // 1. Explicit hint. When the user explicitly names a provider, honor it only
+        //    if that provider is connected. If the named provider has no matching
+        //    connection we must NOT silently substitute a different one — return
+        //    NoProvider so the caller can surface a connect prompt instead.
         if (!string.IsNullOrWhiteSpace(providerHint) &&
             Enum.TryParse<CalendarProvider>(providerHint, ignoreCase: true, out var hinted))
         {
             var hintedConn = activeConnections.FirstOrDefault(c => c.Provider == hinted);
-            if (hintedConn is not null)
-                return ProviderSelectionResult.Ok(hinted, SelectionReason.ExplicitRequest);
+            return hintedConn is not null
+                ? ProviderSelectionResult.Ok(hinted, SelectionReason.ExplicitRequest)
+                : ProviderSelectionResult.NoProvider;
         }
 
         // 2. Default provider flag

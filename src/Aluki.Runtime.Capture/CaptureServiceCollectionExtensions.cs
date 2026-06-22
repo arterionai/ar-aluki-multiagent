@@ -1,10 +1,12 @@
 using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Abstractions.Orchestration;
+using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Capture.Channels.WhatsApp;
 using Aluki.Runtime.Abstractions.Persistence;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Abstractions.Skills;
 using Aluki.Runtime.Capture.Configuration;
+using Aluki.Runtime.Capture.Dispatch;
 using Aluki.Runtime.Capture.Media;
 using Aluki.Runtime.Capture.Memory;
 using Aluki.Runtime.Capture.Observability;
@@ -77,6 +79,10 @@ public static class CaptureServiceCollectionExtensions
         // Coordinator
         services.AddSingleton<WhatsAppCaptureCoordinator>();
         services.AddSingleton<IAgentCoordinator>(sp => sp.GetRequiredService<WhatsAppCaptureCoordinator>());
+
+        // Domain agent dispatch (SB-009B)
+        services.AddSingleton<IDispatchAuditStore, DispatchAuditStore>();
+        services.AddSingleton<IMessageDispatcher, MessageDispatcher>();
 
         return services;
     }

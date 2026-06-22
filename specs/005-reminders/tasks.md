@@ -8,6 +8,50 @@
 
 **Organization**: Tasks are grouped by user story and ordered by dependency so each story is independently implementable and testable.
 
+## Implementation status & adaptations (PR1 — 2026-06-22)
+
+Adapted to the real codebase (same deviations as SB-004):
+
+- **Project**: implemented in a new `src/Aluki.Runtime.Reminders` project (mirrors
+  `Memory`/`Extraction`), not in `Host`.
+- **Migration**: single `db/migrations/010_reminders.sql` (the spec's `004..007`
+  numbers were already taken). Added to the deploy loop + `DbCaptureFixture`.
+- **Scheduling**: **timer-triggered sweep** (`ReminderSweepFunction`, every minute)
+  instead of Durable Functions — durable orchestration with per-reminder timers and
+  retry-backoff is a documented follow-up. Cross-tenant claim uses a SECURITY DEFINER
+  `app.claim_due_reminders` function (RLS-safe, SKIP LOCKED).
+- **Delivery**: pluggable `IReminderDeliveryChannel` with a logging/persisting stub
+  (`LoggingReminderDeliveryChannel`); a real outbound channel (WhatsApp/in-app) plugs
+  in later with no engine change.
+
+**Done in PR1**: foundation (schema, contracts, store, scope guard, DI), **US1
+one-shot** (create/list/snooze/cancel + lifecycle audit), creation-time **quota
+enforcement** (US3 core), and the fire-sweep with idempotent delivery + terminal
+`delivered`/`delivery_failed`/`expired_undelivered`.
+
+**Done in PR2 — US2 recurring**: DST-safe `ReminderRecurrenceCalculator`
+(daily/weekly/monthly, IANA timezone, spring-forward/fall-back hold local time,
+day-31 clamp to last day, `until_date` end boundary). Recurring create validates
+the rule (deriving day-of-week / day-of-month from the start when omitted) and
+stores the first occurrence + recurrence rule; the fire-sweep re-arms each
+recurring reminder to its next occurrence after a successful delivery (status back
+to `scheduled`), one-shots stay terminal. Tests: `ReminderRecurrenceCalculatorTests`
+(16 unit incl. DST), recurring validation in `ReminderContractTests`, and recurring
+create + reschedule in `ReminderLifecycleIntegrationTests`.
+
+**Done in PR3 — delivery retry backoff**: migration `011_reminder_retries.sql`
+(reminder `delivery_attempt_count` + `next_retry_utc`; the claim function also
+harvests due retries). Transient failures retry with exponential backoff
+(`ReminderRetryPolicy` 5s/25s/125s) up to `MaxDeliveryAttempts` (3); permanent
+failures and exhausted retries go terminal `delivery_failed`. NOTE: the sweep runs
+~every minute, so sub-minute backoffs effectively round up to the next tick — the
+schedule is a lower bound; exact sub-minute timing is a Durable-Functions follow-up.
+Tests: backoff in `ReminderPolicyTests`, retry-then-deliver + exhaustion in
+`ReminderLifecycleIntegrationTests`.
+
+**SB-005 complete** (US1 + US2 + US3 quota + snooze + retry). Remaining optional:
+standalone telemetry emitter; sub-minute retry precision via Durable Functions.
+
 ## Phase 1: Setup (Shared Infrastructure)
 
 **Purpose**: Prepare projects, dependencies, and configuration shared by all reminder stories.

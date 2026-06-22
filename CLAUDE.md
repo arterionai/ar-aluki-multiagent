@@ -87,7 +87,173 @@ documented intended behaviors without explicit instruction.
     withheld from the surfaced set. Config `Extraction:ReceiptOcr:Endpoint/ApiKey/
     Deployment`, falling back to `Foundry:Endpoint/ApiKey` +
     `Foundry:VisionDeployment`/`ChatDeployment`.
-- Next per order: SB-005, SB-006, SB-009A, SB-008B, SB-007/008A, SB-009B, 010-012.
+- **SB-005 Scheduled Reminders** — done (US1 deployed; US2 + retry pending merge).
+  Project `Aluki.Runtime.Reminders` (mirrors `Memory`/`Extraction`). Migrations
+  `010_reminders.sql` (reminders/recurrence_rules/delivery_attempts/audit/quotas +
+  tenant RLS + SECURITY DEFINER `app.claim_due_reminders`) and
+  `011_reminder_retries.sql` (`delivery_attempt_count` + `next_retry_utc`; claim
+  also harvests due retries). One-shot + **recurring** (daily/weekly/monthly)
+  create/list/snooze/cancel + creation-time quota enforcement + lifecycle audit.
+  **Scheduling = timer-sweep** (`ReminderSweepFunction`, every minute) not Durable
+  Functions (follow-up); cross-tenant claim via `app.claim_due_reminders`
+  (SKIP LOCKED). **Delivery = pluggable `IReminderDeliveryChannel`** with a
+  logging/persisting stub (`LoggingReminderDeliveryChannel`) until a real outbound
+  channel exists. **Recurrence**: DST-safe `ReminderRecurrenceCalculator` (IANA tz,
+  local time held across DST, day-31→last-day, `until_date` end); the sweep re-arms
+  recurring reminders to the next occurrence after delivery. **Retry**: transient
+  failures retry with backoff (`ReminderRetryPolicy` 5s/25s/125s) up to 3 attempts,
+  then terminal `delivery_failed` (sub-minute backoff rounds to the sweep tick —
+  Durable-Functions follow-up). HTTP (Functions): `POST/GET api/reminders`,
+  `POST api/reminders/{id}/snooze`, `DELETE api/reminders/{id}`. Config `Reminders:*`.
+- **SB-006 Delegated Reminders** — done (not yet deployed). Project
+  `Aluki.Runtime.DelegatedReminders` (mirrors SB-005). Migration
+  `012_delegated_reminders.sql` (delegated_reminders/delegated_recipient_contact/
+  delegated_consent_registry/delegated_delivery_attempt/delegated_audit_event +
+  tenant RLS + SECURITY DEFINER `app.claim_due_delegated_reminders`). Sender→
+  recipient reminders with 3-tier recipient resolution (Tier1=known WhatsApp handle,
+  Tier2=phone-only, Tier3=unknown→awaiting_consent). **Anti-spam**: 10/day rolling
+  window per sender (429 on breach). **Cancellation window**: 30s from due time
+  (generated column `cancel_deadline_utc`). **Retry**: 1/2/4/8/16s backoff (31s
+  total), up to 5 attempts; permanent failures notify sender (stub, WhatsApp follow-up).
+  **Consent gating**: Tier3 held as `awaiting_consent`; promoted to `scheduled` on
+  `opted_in` upsert. Re-verified at delivery time. **Sweep**: `DelegatedReminderSweepFunction`
+  (every minute), claims fresh-due + retry-due atomically via SECURITY DEFINER.
+  **Delivery = pluggable `IDelegatedReminderDeliveryChannel`** with logging stub
+  (`LoggingDelegatedReminderDeliveryChannel`). Idempotency key: external ID or
+  SHA256(`userId:recipient:dueUnixSeconds:contentLower`). HTTP (Functions):
+  `POST/GET api/delegated-reminders`, `DELETE api/delegated-reminders/{id}`.
+  Config `DelegatedReminders:*`.
+- **SB-009A Link Capture** — done (not yet deployed). Migration `013_link_capture.sql`
+  (link_artifacts/link_provenance_refs/link_pending_confirmations/link_enrichment_attempts/
+  link_enrichment_policy_decisions/link_audit_events + tenant RLS). URL detection +
+  canonical normalization + SHA256 hash dedup (`LinkCanonicalization`). Capture
+  outcomes: `created`, `upsert_merged` (same canonical URL + new source), `idempotent_noop`
+  (exact replay). One-time yes/no confirmation: atomic `TryConsumeConfirmationAsync`
+  (WHERE state='pending'), expiry sweep (`ExpireConfirmationsFunction`, every 5m).
+  Enrichment: policy-first (block private/loopback IPs), 4s timeout, fallback description,
+  fire-and-forget background scope. Recall: ILIKE substring search across url/label/description.
+  Implementation split: contracts/interfaces/canonicalization in `Aluki.Runtime.Abstractions/
+  Skills/LinkCapture`; repository/services/policy in `Aluki.Runtime.Host/Skills/LinkCapture/`;
+  HTTP endpoints in Functions (`LinkCaptureFunctions`). HTTP: `POST api/skills/link-capture/
+  capture|confirm|recall`. Config: no dedicated section (uses `Postgres:*` + `HttpClient`
+  "link-enrichment").
+- **SB-008B YouTube Link Save and Classification** — done (not yet deployed). Migration
+  `014_youtube_link_capture.sql` (saved_link_artifacts/link_enrichments/link_classifications/
+  link_capture_audit_events + tenant RLS). YouTube URL detection + canonical video ID extraction
+  (watch/shorts/embed/youtu.be/m.youtube.com), SHA256-style dedup by `canonical_video_id`.
+  Provider fallback chain: primary→secondary→degraded; enrichment states: `enriched`, `partial`,
+  `degraded`. AI classification: `IYouTubeClassificationProvider` with confidence labels
+  (`high`/`medium`/`low`) and uncertainty flags per field. Stubs: `LoggingYouTubeMetadataProvider`
+  (both primary+secondary), `StubYouTubeClassificationProvider`. Implementation split: contracts/
+  interfaces/canonicalizer in `Aluki.Runtime.Abstractions/Skills/YouTubeLinks`; repository/services/
+  stubs in `Aluki.Runtime.Host/Skills/YouTubeLinks/`; HTTP in Functions (`CaptureYoutubeLinksFunction`).
+  HTTP: `POST api/v1/skills/youtube-links/capture`. Config: uses `Postgres:*`.
+- **SB-007 Feedback Suggestions Capture** — done (not yet deployed). Migration
+  `015_feedback_suggestions.sql` (suggestions/suggestion_attachments/suggestion_state_transitions
+  + tenant+user RLS). Keyword-based intent detection stub. 30-min context window per tenant-user
+  (one active at a time). Attachment MIME/size validation (audio ≤50MB mp4/webm/ogg/mpeg,
+  photo ≤10MB JPEG/PNG, text ≤5KB inline). Lifecycle: captured→enriched→sent_user→archived
+  (one-way). Archival sweep timer (hourly, 90-day cutoff). Idempotency: `(message_id+payload_hash)`
+  partial unique index on active states. Implementation split: contracts/interfaces in
+  `Aluki.Runtime.Abstractions/Skills/Feedback`; repository/service in
+  `Aluki.Runtime.Host/Skills/Feedback/`; HTTP in Functions (`FeedbackFunctions`).
+  HTTP: `POST api/skills/feedback/capture|attach`. Config: uses `Postgres:*`.
+- **SB-008A Suggestions Admin and Rewards** — done (not yet deployed). Migration
+  `016_suggestions_admin.sql` (suggestion_admin_queue/suggestion_admin_audit_ledger/
+  reward_entitlement_ledger/reward_notification_delivery/reward_decision_record + tenant RLS,
+  no user filter — staff-wide). RBAC: AdminReviewer (captured→under_review, category/priority),
+  AdminApprover (all transitions), AdminAuditor (read-only). Audit ledger: WORM append-only
+  with bigserial sequence + SHA256 record_hash. Rewards: idempotency boundary
+  (tenant+user+suggestion+rule+sourceEventId), Granted/Duplicate/Conflict outcomes. Notification
+  sweep: 1/5/15/60/360min backoff, dead-letter after 5 attempts (stub delivery). Implementation
+  split: contracts in `Aluki.Runtime.Abstractions/Skills/SuggestionsAdmin`; repository/services
+  in `Aluki.Runtime.Host/Skills/SuggestionsAdmin/`; HTTP in Functions (`SuggestionsAdminFunctions`).
+  HTTP: `GET api/admin/suggestions`, `POST api/admin/suggestions/{id}/triage`,
+  `POST api/admin/rewards/decide`. Config: uses `Postgres:*`.
+- **SB-009B Domain Agents Runtime** — done (not yet deployed). Migration
+  `017_dispatch_audit.sql` (dispatch_audit_events + tenant RLS, WORM append-only).
+  **Architecture**: `IMessageDispatcher` evaluates all registered `IDomainAgent`
+  implementations in deterministic order (priority asc → AgentId lexical asc →
+  RegisteredAt asc). Tie-break recorded in audit ledger. `MemoryDomainAgent`
+  (priority=int.MaxValue) is the catch-all fallback; wraps `IMemoryIngestionSink`.
+  **Channel-agnostic**: `UnifiedMessage` produced by `NormalizeWhatsAppInboundSkill`
+  decouples domain agents from WhatsApp specifics — adding SMS/email requires no
+  domain agent changes. **Failure containment**: agent exceptions contained at dispatch
+  boundary (FR-010/FR-015); fallback is NOT used to mask a selected-agent failure.
+  **Audit**: `DispatchAuditRecord` persisted for every cycle (selected agent or fallback
+  reason, tie-break rationale, failure details, correlation metadata). `WhatsAppCaptureCoordinator`
+  now calls `IMessageDispatcher` (replacing direct `IMemoryIngestionSink`) as best-effort
+  post-capture. Abstractions in `Aluki.Runtime.Abstractions/Orchestration/Dispatch/`;
+  `MessageDispatcher`/`DispatchAuditStore`/`NullMessageDispatcher` in
+  `Aluki.Runtime.Capture/Dispatch/`; `MemoryDomainAgent` in `Aluki.Runtime.Memory/Dispatch/`.
+- **SB-012 Governance & Security** — done (not yet deployed). Migration
+  `018_governance_security.sql` (consent_records/policy_rules/policy_decision_log +
+  tenant RLS). **Consent**: generic grant/revoke/check/list — broader than
+  delegated_consent_registry (SB-006); partial unique index enforces one active
+  consent per (tenant,grantor,grantee,type). **Policy rules**: tenant-configurable
+  rules (quota/budget/feature_flag/compliance/fraud_risk) evaluated in priority order;
+  first deny wins, then warn, then allow. `PolicyDecisionEngine` defaults to allow
+  with `no_applicable_rules` when no active rules match. Every evaluation is
+  WORM-persisted to `policy_decision_log`. **ConsentType** constants:
+  DelegatedReminderSend, ShareMemory, ViewCalendar, SendFeedbackOnBehalf.
+  Implementation split: contracts/interfaces in `Aluki.Runtime.Abstractions/Governance/`;
+  `GovernanceRepository`/`PolicyDecisionEngine`/`ConsentManager` + `AddGovernance()` in
+  `Aluki.Runtime.Host/Skills/Governance/`; HTTP in Functions (`GovernanceFunctions`).
+  HTTP: `POST api/governance/policy/evaluate`, `GET/POST api/governance/policy/rules`,
+  `POST api/governance/consent/grant|revoke`, `GET api/governance/consent/check|by-grantor|by-grantee`.
+- **SB-011 Semantic Graph** — done (not yet deployed). Migration `019_semantic_graph.sql`
+  (semantic_entities/semantic_entity_aliases/semantic_relationships/semantic_entity_facts +
+  tenant RLS). **Entity resolution**: LLM-driven extraction via `IChatModelRouter` (Azure AI
+  Foundry); deduplication by alias/canonical_name case-insensitive lookup; new entities created
+  and aliases registered on first encounter. **Relationship types**: worksAt, owns, mentions,
+  collaboratesWith, manages, generic (archived on lifecycle change — immutable audit trail).
+  **Graph traversal**: BFS hop-by-hop (max 3 hops); bidirectional index maintained.
+  **Entity merge**: cascading update of all relationship references + alias copy → source deactivated.
+  **Entity-fact links**: provenance table `semantic_entity_facts` links entities to `memory_artifact`
+  fact IDs (idempotent upsert). `Aluki.Runtime.Host` now references `Aluki.Runtime.Memory`
+  (adds IChatModelRouter). Implementation split: contracts/interfaces in
+  `Aluki.Runtime.Abstractions/SemanticGraph/`; `SemanticGraphRepository`/`EntityResolutionService`/
+  `GraphTraversalService` + `AddSemanticGraph()` in `Aluki.Runtime.Host/Skills/SemanticGraph/`;
+  HTTP in Functions (`SemanticGraphFunctions`).
+  HTTP: `POST api/semantic-graph/resolve`, `GET/POST api/semantic-graph/entities|entities/{id}|entities/merge`,
+  `GET api/semantic-graph/traverse|path`, `POST api/semantic-graph/relationships/{id}/archive`.
+- **SB-000 Core Conversational Response** — done (not yet deployed). Project
+  `Aluki.Runtime.Conversation`. Migration `020_conversational_response.sql`
+  (`app.outbound_messages` table with idempotency constraint `(tenant_id,
+  correlation_message_id)`, RLS select+insert policies). `ConversationalResponseAgent`
+  (priority=100): claims all WhatsApp messages with sender+phoneNumberId; audio →
+  immediate acknowledgment (no LLM); text → parallel history+recall, LLM call via
+  `IChatModelRouter`, send reply, persist outbound record; US2 no-memory suffix
+  appended when `MemoryStatus.NoResult`; US4 graceful fallback on LLM/network
+  failure; memory ingestion is fire-and-forget `Task.Run` (so MemoryDomainAgent is
+  not needed for ingestion). `ConversationHistoryStore`: UNION of
+  `app.unified_message_artifact` (inbound) + `app.outbound_messages` (outbound),
+  sets RLS GUC, returns chronological turns. `ConversationOptions`: HistoryWindowSize,
+  LlmTimeoutSeconds, ErrorFallbackMessage, AudioAcknowledgmentMessage,
+  NoMemoryMessageSuffix. `IWhatsAppMessenger` extended with `SendTextMessageAsync`.
+- **SB-010 Billing & Package Management** — done (not yet deployed). Migration `021_billing.sql`
+  (billing_catalog_versions/meter_prices/package_definition_versions/package_quota_rules as **global catalog
+  tables, no RLS**; billing_accounts/package_subscriptions/billing_ledger_entries/credit_balances/
+  credit_movements/invoices/invoice_lines/billing_audit_events as **tenant-scoped tables with RLS**;
+  ledger + credit_movements + billing_audit_events are WORM: SELECT+INSERT only).
+  **Two billing modes**: `payg` (per-meter unit price from published catalog) and `package`
+  (included quota → credit debit → billable overage or hard_stop). **Entitlement decision order**:
+  `allow_included` → `allow_credit` → `allow_overage` → `deny_hard_stop` → `deny_status` →
+  `idempotent_noop`. Idempotency enforced via `unique (tenant_id, idempotency_key)` on ledger and
+  credit_movements. **Invoice generation**: deterministic aggregation of PAYG/overage/adjustment
+  ledger entries per cycle window; idempotent by (tenant, cycle_start, cycle_end). **Credit topup**:
+  `BillingCycleService.TopUpCreditAsync` with idempotency key. Implementation split: contracts/
+  interfaces in `Aluki.Runtime.Abstractions/Billing/`; `BillingRepository`/`EntitlementService`/
+  `BillingCycleService` + `AddBilling()` in `Aluki.Runtime.Host/Skills/Billing/`; HTTP in
+  Functions (`BillingFunctions`).
+  HTTP: `POST api/billing/usage/record`, `GET api/billing/entitlements/{tenantId}`,
+  `POST api/billing/invoices/generate`, `GET api/billing/invoices`,
+  `POST api/billing/credits/topup`, `GET api/billing/credits/{tenantId}`,
+  `POST api/billing/accounts`, `GET api/billing/accounts/{tenantId}`,
+  `POST api/billing/subscriptions`, `POST api/billing/catalog/versions|meter-prices|packages|quota-rules`.
+  **Migration renumbering note**: was `020_billing.sql`, renamed to `021_billing.sql` — slot 020
+  was reserved for SB-000 Core Conversational Response.
+- Next per order: SB-011 (done). All SB-000, SB-010, SB-011 completed.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 

@@ -9,7 +9,8 @@ public sealed record WhatsAppInboundEnvelope(
     [property: JsonPropertyName("context_metadata")] ContextMetadata? ContextMetadata,
     [property: JsonPropertyName("payload")] Payload Payload,
     [property: JsonPropertyName("occurred_at_utc")] DateTimeOffset OccurredAtUtc,
-    [property: JsonPropertyName("correlation_id")] string? CorrelationId
+    [property: JsonPropertyName("correlation_id")] string? CorrelationId,
+    [property: JsonPropertyName("phone_number_id")] string? PhoneNumberId = null
 );
 
 public sealed record SenderInfo(

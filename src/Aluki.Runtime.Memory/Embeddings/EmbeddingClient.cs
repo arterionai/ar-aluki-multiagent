@@ -20,21 +20,24 @@ public interface IEmbeddingClient
 public sealed class AzureOpenAIEmbeddingClient : IEmbeddingClient
 {
     private readonly string _deployment;
-    private readonly AzureOpenAIClient _client;
+    private readonly Lazy<AzureOpenAIClient> _client;
 
     public AzureOpenAIEmbeddingClient(IConfiguration configuration)
     {
-        var endpoint = configuration["AiExtraction:Endpoint"]
-            ?? throw new InvalidOperationException("AiExtraction:Endpoint is not configured.");
-        var apiKey = configuration["AiExtraction:ApiKey"]
-            ?? throw new InvalidOperationException("AiExtraction:ApiKey is not configured.");
         _deployment = configuration["AiExtraction:EmbeddingDeployment"] ?? "gotnote-embeddings";
-        _client = new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
+        _client = new Lazy<AzureOpenAIClient>(() =>
+        {
+            var endpoint = configuration["AiExtraction:Endpoint"]
+                ?? throw new InvalidOperationException("AiExtraction:Endpoint is not configured.");
+            var apiKey = configuration["AiExtraction:ApiKey"]
+                ?? throw new InvalidOperationException("AiExtraction:ApiKey is not configured.");
+            return new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
+        });
     }
 
     public async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken)
     {
-        var embeddingClient = _client.GetEmbeddingClient(_deployment);
+        var embeddingClient = _client.Value.GetEmbeddingClient(_deployment);
         var result = await embeddingClient.GenerateEmbeddingAsync(text, cancellationToken: cancellationToken);
         return result.Value.ToFloats().ToArray();
     }

@@ -1,6 +1,6 @@
 using Aluki.Runtime.Abstractions.Channels.WhatsApp;
-using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Abstractions.Orchestration;
+using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Persistence;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Abstractions.Skills;
@@ -42,7 +42,7 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
     private readonly WriteScopeDeniedAuditSkill _writeScopeDeniedAudit;
     private readonly WriteRetryAuditSkill _writeRetryAudit;
     private readonly IMediaDownloadQueue _mediaDownloadQueue;
-    private readonly IMemoryIngestionSink _memoryIngestionSink;
+    private readonly IMessageDispatcher _messageDispatcher;
     private readonly ILogger<WhatsAppCaptureCoordinator> _logger;
 
     public WhatsAppCaptureCoordinator(
@@ -59,7 +59,7 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
         WriteScopeDeniedAuditSkill writeScopeDeniedAudit,
         WriteRetryAuditSkill writeRetryAudit,
         IMediaDownloadQueue mediaDownloadQueue,
-        IMemoryIngestionSink memoryIngestionSink,
+        IMessageDispatcher messageDispatcher,
         ILogger<WhatsAppCaptureCoordinator> logger)
     {
         _principalResolver = principalResolver;
@@ -75,7 +75,7 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
         _writeScopeDeniedAudit = writeScopeDeniedAudit;
         _writeRetryAudit = writeRetryAudit;
         _mediaDownloadQueue = mediaDownloadQueue;
-        _memoryIngestionSink = memoryIngestionSink;
+        _messageDispatcher = messageDispatcher;
         _logger = logger;
     }
 
@@ -303,9 +303,8 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
             }
         }
 
-        // Promote the captured text into personal memory so it becomes recall-able
-        // (best-effort; never fails or delays the capture acknowledgement).
-        await TryIngestIntoMemoryAsync(state, cancellationToken);
+        // Dispatch the normalized message to domain agents (best-effort; never fails capture).
+        await TryDispatchAsync(state, cancellationToken);
 
         var kind = state.IsUnsupported ? CaptureOutcomeKind.AcceptedUnsupported : CaptureOutcomeKind.Accepted;
         var auditEvent = state.IsUnsupported ? CaptureAuditEvent.UnsupportedPayload : CaptureAuditEvent.Accepted;
@@ -319,37 +318,20 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
             AttemptCount: state.AttemptNumber);
     }
 
-    private async Task TryIngestIntoMemoryAsync(CapturePipelineState state, CancellationToken cancellationToken)
+    private async Task TryDispatchAsync(CapturePipelineState state, CancellationToken cancellationToken)
     {
-        // Only supported messages carrying text (incl. media captions) are memory-worthy.
-        var text = state.Normalized?.MessageText;
-        if (state.IsUnsupported || string.IsNullOrWhiteSpace(text))
-        {
+        if (state.UnifiedMessage is not { } msg)
             return;
-        }
-
-        var principal = state.Principal;
-        var sourceIdentity = state.Envelope.ProviderMessageId;
 
         try
         {
-            await _memoryIngestionSink.IngestAsync(
-                new MemoryIngestionItem(
-                    TenantId: principal.TenantId,
-                    ContextId: principal.ContextId,
-                    UserId: principal.UserId,
-                    SourceChannel: state.SourceChannel,
-                    SourceIdentity: sourceIdentity,
-                    ContentText: text!,
-                    ProvenanceRef: $"{state.SourceChannel}:{sourceIdentity}",
-                    CorrelationId: state.CorrelationId),
-                cancellationToken);
+            await _messageDispatcher.DispatchAsync(msg, state.Principal, cancellationToken);
         }
         catch (Exception ex)
         {
             _logger.LogError(
                 ex,
-                "Failed to ingest captured message into personal memory. correlation_id={CorrelationId}",
+                "Domain agent dispatch failed (contained). correlation_id={CorrelationId}",
                 state.CorrelationId);
         }
     }
