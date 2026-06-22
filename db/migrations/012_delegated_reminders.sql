@@ -5,6 +5,17 @@
 -- audit. Builds on tenancy/RLS from 001/003. pgcrypto is NOT allow-listed on
 -- Azure; use core gen_random_uuid() (PG16).
 
+-- ── Helper: immutable 30-second subtraction ─────────────────────────────────
+-- timestamptz - interval is only STABLE in PG (timezone-sensitive display), so
+-- it cannot be used directly in a generated column expression. Wrapping in an
+-- IMMUTABLE function is safe for a fixed-second interval (30s is always 30s).
+
+create or replace function app.tstz_minus_30s(ts timestamptz)
+returns timestamptz
+language sql
+immutable
+as $$ select ts - interval '30 seconds' $$;
+
 -- ── Core reminder record ────────────────────────────────────────────────────
 
 create table if not exists delegated_reminders (
@@ -17,7 +28,7 @@ create table if not exists delegated_reminders (
     routing_key text not null,
     content text not null check (char_length(content) between 1 and 1000),
     due_time_utc timestamptz not null,
-    cancel_deadline_utc timestamptz not null generated always as (due_time_utc - interval '30 seconds') stored,
+    cancel_deadline_utc timestamptz not null generated always as (app.tstz_minus_30s(due_time_utc)) stored,
     delivery_phase_started_at_utc timestamptz,
     status text not null default 'draft'
         check (status in (
