@@ -1,0 +1,201 @@
+openapi: "3.1.0"
+info:
+  title: "Aluki Conversational Response — Internal Contracts"
+  version: "1.0.0"
+  description: |
+    Internal contracts for SB-000 Core Conversational Response.
+    No new public HTTP endpoints are introduced. Response generation is
+    triggered by the existing inbound WhatsApp webhook (api/whatsapp POST).
+    These contracts define the outbound message persistence and conversation
+    history retrieval interfaces used internally.
+
+# ---------------------------------------------------------------------------
+# Domain models
+# ---------------------------------------------------------------------------
+components:
+  schemas:
+
+    ConversationTurn:
+      type: object
+      required: [body, direction, created_at]
+      properties:
+        body:
+          type: string
+          description: The text content of the turn.
+        direction:
+          type: string
+          enum: [inbound, outbound]
+          description: Whether the turn was sent by the user (inbound) or Aluki (outbound).
+        created_at:
+          type: string
+          format: date-time
+          description: UTC timestamp of the turn.
+
+    OutboundMessage:
+      type: object
+      required:
+        - id
+        - tenant_id
+        - user_id
+        - correlation_message_id
+        - channel
+        - recipient_wa_id
+        - body
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for this outbound message record.
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant that owns this message. Used for RLS enforcement.
+        user_id:
+          type: string
+          format: uuid
+          description: User on behalf of whom the reply was sent.
+        correlation_message_id:
+          type: string
+          description: |
+            Provider message ID of the inbound trigger. Together with tenant_id,
+            this is the idempotency key — one outbound row per inbound trigger.
+        channel:
+          type: string
+          example: whatsapp
+          description: Delivery channel (extensible).
+        recipient_wa_id:
+          type: string
+          description: Destination WhatsApp number (the original sender's wa_id).
+        body:
+          type: string
+          description: The text sent to the user.
+        status:
+          type: string
+          enum: [delivered, error_fallback, pending]
+          description: |
+            - delivered: message sent successfully via Meta Graph API.
+            - error_fallback: friendly error message sent after LLM or send failure.
+            - pending: reserved for future async retry flows.
+        error_reason:
+          type: string
+          nullable: true
+          description: Populated when status = error_fallback. E.g. llm_failure, send_failed.
+        created_at:
+          type: string
+          format: date-time
+        delivered_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    AgentOutcome:
+      type: object
+      description: |
+        Result returned by ConversationalResponseAgent to the MessageDispatcher.
+        Not exposed over HTTP — internal dispatch contract only.
+      required: [success, outcome_code]
+      properties:
+        success:
+          type: boolean
+        outcome_code:
+          type: string
+          enum:
+            - response_sent
+            - error_fallback
+            - no_text_skipped
+          description: |
+            - response_sent: reply generated and sent successfully.
+            - error_fallback: friendly error message sent; LLM or send failed.
+            - no_text_skipped: message had no text content, agent skipped LLM call.
+
+# ---------------------------------------------------------------------------
+# Outbound persistence interface (IOutboundMessageStore)
+# ---------------------------------------------------------------------------
+  # Internal interface contract — not exposed as HTTP.
+  # Idempotency: INSERT … ON CONFLICT (tenant_id, correlation_message_id) DO NOTHING.
+  # Returns is_new=true if newly inserted, false if duplicate suppressed.
+
+# ---------------------------------------------------------------------------
+# Conversation history interface (IConversationHistoryStore)
+# ---------------------------------------------------------------------------
+  # Internal interface contract — not exposed as HTTP.
+  # Queries unified_message_artifact (inbound) UNION outbound_messages (outbound)
+  # ordered by created_at DESC LIMIT N (default 10, configurable).
+
+# ---------------------------------------------------------------------------
+# Extended UnifiedMessage fields (channel metadata propagation)
+# ---------------------------------------------------------------------------
+  UnifiedMessageExtension:
+    description: |
+      Fields added to UnifiedMessage in SB-000 to support outbound routing.
+      These fields are populated by NormalizeWhatsAppInboundSkill and sourced
+      from the WhatsApp webhook's value.metadata and message.from sections.
+    type: object
+    properties:
+      sender_external_id:
+        type: string
+        nullable: true
+        description: |
+          The sender's WhatsApp number (wa_id / "from" field in the webhook).
+          Used as the recipient address for outbound replies.
+      phone_number_id:
+        type: string
+        nullable: true
+        description: |
+          The business WhatsApp Phone Number ID (value.metadata.phone_number_id).
+          Required to POST to the correct Meta Graph API endpoint for outbound messages.
+
+# ---------------------------------------------------------------------------
+# IWhatsAppMessenger extension
+# ---------------------------------------------------------------------------
+  SendTextMessageRequest:
+    description: |
+      Payload sent to Meta Graph API POST /{phone_number_id}/messages
+      when delivering an Aluki reply via WhatsApp.
+    type: object
+    required: [messaging_product, to, type, text]
+    properties:
+      messaging_product:
+        type: string
+        const: whatsapp
+      to:
+        type: string
+        description: Recipient wa_id (SenderExternalId from the inbound UnifiedMessage).
+      type:
+        type: string
+        const: text
+      text:
+        type: object
+        required: [body]
+        properties:
+          body:
+            type: string
+            description: The Aluki reply text. Max 4096 characters per WhatsApp limits.
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+  ConversationOptions:
+    description: |
+      Runtime configuration for SB-000. Lives under the "Conversation" key
+      in appsettings.json / Azure Function app settings.
+    type: object
+    properties:
+      history_window_size:
+        type: integer
+        default: 10
+        description: Number of recent conversation turns to include in LLM context.
+      llm_timeout_seconds:
+        type: integer
+        default: 8
+        description: Hard timeout for the LLM call. Exceeded → ErrorFallbackMessage sent.
+      error_fallback_message:
+        type: string
+        default: "Tuve un problema procesando tu mensaje, inténtalo de nuevo 🙏"
+        description: Message sent to the user when LLM or outbound send fails.
+      audio_acknowledgment_message:
+        type: string
+        default: "¡Perfecto! Ahora escucho tu audio y en breve te respondo 🎧"
+        description: Immediate reply sent when an audio message is received.
