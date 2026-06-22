@@ -1,5 +1,6 @@
 using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Abstractions.Orchestration;
+using Aluki.Runtime.Capture.Channels.WhatsApp;
 using Aluki.Runtime.Abstractions.Persistence;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Abstractions.Skills;
@@ -49,6 +50,10 @@ public static class CaptureServiceCollectionExtensions
         // Capture→memory bridge: default to a no-op sink. AddPersonalMemory replaces
         // it with the real sink so captured messages become recall-able.
         services.TryAddSingleton<IMemoryIngestionSink, NoOpMemoryIngestionSink>();
+
+        // Outbound delivery feedback (read receipt + typing indicator): default to a
+        // no-op. The Functions deployment overrides this with the Graph API messenger.
+        services.TryAddSingleton<IWhatsAppMessenger, NullWhatsAppMessenger>();
 
         // Capture skills (concrete + exposed via ISkill for the dispatcher)
         services.AddSingleton<ScopeGuardSkill>();

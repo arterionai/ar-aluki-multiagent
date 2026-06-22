@@ -3,6 +3,9 @@ using Aluki.Runtime.Abstractions.Channels.WhatsApp;
 
 namespace Aluki.Runtime.Capture.Channels.WhatsApp;
 
+/// <summary>An inbound message to acknowledge with a read receipt + typing indicator.</summary>
+public sealed record WhatsAppReadReceiptTarget(string PhoneNumberId, string MessageId);
+
 /// <summary>
 /// Maps a Meta WhatsApp Cloud API webhook payload into zero or more
 /// <see cref="WhatsAppInboundEnvelope"/> values (one per inbound message).
@@ -61,6 +64,65 @@ public static class MetaWebhookMapper
         }
 
         return envelopes;
+    }
+
+    /// <summary>
+    /// Extracts the (phone_number_id, message_id) pairs for every inbound message,
+    /// so the webhook can immediately send a read receipt + typing indicator to the
+    /// sender. Returns nothing for status/delivery notifications.
+    /// </summary>
+    public static IReadOnlyList<WhatsAppReadReceiptTarget> ExtractReadReceiptTargets(string json)
+    {
+        var targets = new List<WhatsAppReadReceiptTarget>();
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return targets;
+        }
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        if (!root.TryGetProperty("entry", out var entries) || entries.ValueKind != JsonValueKind.Array)
+        {
+            return targets;
+        }
+
+        foreach (var entry in entries.EnumerateArray())
+        {
+            if (!entry.TryGetProperty("changes", out var changes) || changes.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var change in changes.EnumerateArray())
+            {
+                if (!change.TryGetProperty("value", out var value) ||
+                    !value.TryGetProperty("messages", out var messages) ||
+                    messages.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                var phoneNumberId = value.TryGetProperty("metadata", out var metadata)
+                    ? GetString(metadata, "phone_number_id")
+                    : null;
+                if (string.IsNullOrWhiteSpace(phoneNumberId))
+                {
+                    continue;
+                }
+
+                foreach (var message in messages.EnumerateArray())
+                {
+                    var messageId = GetString(message, "id");
+                    if (!string.IsNullOrWhiteSpace(messageId))
+                    {
+                        targets.Add(new WhatsAppReadReceiptTarget(phoneNumberId!, messageId!));
+                    }
+                }
+            }
+        }
+
+        return targets;
     }
 
     private static WhatsAppInboundEnvelope? MapMessage(JsonElement message, JsonElement contacts)

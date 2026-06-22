@@ -146,4 +146,40 @@ public sealed class MetaWebhookMapperTests
         Assert.Empty(MetaWebhookMapper.Map(""));
         Assert.Empty(MetaWebhookMapper.Map("{}"));
     }
+
+    [Fact]
+    public void Extracts_read_receipt_targets_with_phone_number_id()
+    {
+        var json = Envelope("""
+            {"from":"5215555555555","id":"wamid.1","timestamp":"1690000000","type":"text","text":{"body":"a"}},
+            {"from":"5215555555555","id":"wamid.2","timestamp":"1690000001","type":"text","text":{"body":"b"}}
+            """);
+
+        var targets = MetaWebhookMapper.ExtractReadReceiptTargets(json);
+
+        Assert.Equal(2, targets.Count);
+        Assert.All(targets, t => Assert.Equal("PNID", t.PhoneNumberId));
+        Assert.Equal(["wamid.1", "wamid.2"], targets.Select(t => t.MessageId));
+    }
+
+    [Fact]
+    public void Extracts_no_targets_for_status_only_payloads()
+    {
+        var json = """
+        {"object":"whatsapp_business_account","entry":[{"id":"WABA","changes":[{"field":"messages","value":{
+          "messaging_product":"whatsapp",
+          "metadata":{"display_phone_number":"1","phone_number_id":"P"},
+          "statuses":[{"id":"wamid.x","status":"delivered","timestamp":"1690000000","recipient_id":"5215555555555"}]
+        }}]}]}
+        """;
+
+        Assert.Empty(MetaWebhookMapper.ExtractReadReceiptTargets(json));
+    }
+
+    [Fact]
+    public void Extract_targets_empty_or_blank_returns_empty()
+    {
+        Assert.Empty(MetaWebhookMapper.ExtractReadReceiptTargets(""));
+        Assert.Empty(MetaWebhookMapper.ExtractReadReceiptTargets("{}"));
+    }
 }

@@ -1,5 +1,7 @@
 using Aluki.Runtime.Capture;
+using Aluki.Runtime.Capture.Channels.WhatsApp;
 using Aluki.Runtime.Capture.Media;
+using Aluki.Runtime.Extraction;
 using Aluki.Runtime.Functions.Media;
 using Aluki.Runtime.Memory;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,6 +13,10 @@ var host = new HostBuilder()
     {
         services.AddWhatsAppCapture(context.Configuration);
         services.AddPersonalMemory(context.Configuration);
+        services.AddAiExtraction(context.Configuration);
+
+        // Outbound delivery feedback (read receipt + typing indicator) via Graph API.
+        services.AddHttpClient<IWhatsAppMessenger, MetaWhatsAppMessenger>();
 
         // Async media download (Graph API -> Blob). Overrides the no-op queue.
         services.AddHttpClient<IMetaMediaClient, MetaMediaClient>();

@@ -16,13 +16,16 @@ public sealed class MetaWhatsAppWebhookFunction
     private const string SignatureHeader = "x-hub-signature-256";
 
     private readonly WhatsAppCaptureCoordinator _coordinator;
+    private readonly IWhatsAppMessenger _messenger;
     private readonly ILogger<MetaWhatsAppWebhookFunction> _logger;
 
     public MetaWhatsAppWebhookFunction(
         WhatsAppCaptureCoordinator coordinator,
+        IWhatsAppMessenger messenger,
         ILogger<MetaWhatsAppWebhookFunction> logger)
     {
         _coordinator = coordinator;
+        _messenger = messenger;
         _logger = logger;
     }
 
@@ -75,6 +78,24 @@ public sealed class MetaWhatsAppWebhookFunction
         try
         {
             var payload = Encoding.UTF8.GetString(body);
+
+            // Immediately acknowledge each inbound message to the sender: blue ticks
+            // (read receipt) + the typing indicator. Best-effort, never blocks capture.
+            foreach (var target in MetaWebhookMapper.ExtractReadReceiptTargets(payload))
+            {
+                try
+                {
+                    await _messenger.MarkReadAndShowTypingAsync(target.PhoneNumberId, target.MessageId, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Failed to send read/typing indicator. provider_message_id={MessageId}",
+                        target.MessageId);
+                }
+            }
+
             var envelopes = MetaWebhookMapper.Map(payload);
             foreach (var envelope in envelopes)
             {
