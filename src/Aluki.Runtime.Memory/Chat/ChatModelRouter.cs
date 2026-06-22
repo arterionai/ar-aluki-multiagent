@@ -17,21 +17,24 @@ public interface IChatModelRouter
 public sealed class FoundryChatModelRouter : IChatModelRouter
 {
     private readonly string _deployment;
-    private readonly AzureOpenAIClient _client;
+    private readonly Lazy<AzureOpenAIClient> _client;
 
     public FoundryChatModelRouter(IConfiguration configuration)
     {
-        var endpoint = configuration["Foundry:Endpoint"]
-            ?? throw new InvalidOperationException("Foundry:Endpoint is not configured.");
-        var apiKey = configuration["Foundry:ApiKey"]
-            ?? throw new InvalidOperationException("Foundry:ApiKey is not configured.");
         _deployment = configuration["Foundry:ChatDeployment"] ?? "model-router";
-        _client = new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
+        _client = new Lazy<AzureOpenAIClient>(() =>
+        {
+            var endpoint = configuration["Foundry:Endpoint"]
+                ?? throw new InvalidOperationException("Foundry:Endpoint is not configured.");
+            var apiKey = configuration["Foundry:ApiKey"]
+                ?? throw new InvalidOperationException("Foundry:ApiKey is not configured.");
+            return new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
+        });
     }
 
     public async Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
     {
-        var chat = _client.GetChatClient(_deployment);
+        var chat = _client.Value.GetChatClient(_deployment);
         var messages = new ChatMessage[]
         {
             new SystemChatMessage(systemPrompt),

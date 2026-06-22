@@ -1,5 +1,6 @@
 using Aluki.Runtime.Capture;
 using Aluki.Runtime.Conversation;
+using Aluki.Runtime.Memory;
 using Aluki.Runtime.Host;
 using Aluki.Runtime.Host.Calendar;
 using Aluki.Runtime.Host.Skills.Billing;
@@ -34,6 +35,9 @@ if (keyVaultEnabled && Uri.TryCreate(keyVaultUriText, UriKind.Absolute, out var 
 
 // WhatsApp capture pipeline (shared with the Functions deployment).
 builder.Services.AddWhatsAppCapture(builder.Configuration);
+
+// Personal memory & grounded recall (SB-002): embeddings, recall, ingestion sink.
+builder.Services.AddPersonalMemory(builder.Configuration);
 
 // Calendar integration skills, repositories, and telemetry.
 builder.Services.AddCalendarIntegration(builder.Configuration);
