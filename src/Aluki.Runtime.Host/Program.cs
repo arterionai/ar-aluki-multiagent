@@ -1,7 +1,9 @@
 using Aluki.Runtime.Capture;
 using Aluki.Runtime.Host;
 using Aluki.Runtime.Host.Calendar;
+using Aluki.Runtime.Host.Skills.Feedback;
 using Aluki.Runtime.Host.Skills.LinkCapture;
+using Aluki.Runtime.Host.Skills.SuggestionsAdmin;
 using Aluki.Runtime.Host.Skills.YouTubeLinks;
 using Aluki.Runtime.Host.Channels.WhatsApp;
 using Aluki.Runtime.Host.Endpoints;
@@ -37,6 +39,10 @@ builder.Services.AddLinkCapture(builder.Configuration);
 
 // YouTube link save and classification (SB-008B).
 builder.Services.AddYouTubeLinkCapture(builder.Configuration);
+
+// Feedback suggestions capture (SB-007).
+builder.Services.AddFeedbackCapture(builder.Configuration);
+builder.Services.AddSuggestionsAdmin(builder.Configuration);
 
 // Background heartbeat (existing runtime worker)
 builder.Services.AddHostedService<Worker>();
