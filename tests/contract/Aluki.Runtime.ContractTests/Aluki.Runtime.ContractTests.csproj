@@ -19,6 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\Aluki.Runtime.Host\Aluki.Runtime.Host.csproj" />
     <ProjectReference Include="..\..\..\src\Aluki.Runtime.Extraction\Aluki.Runtime.Extraction.csproj" />
+    <ProjectReference Include="..\..\..\src\Aluki.Runtime.Reminders\Aluki.Runtime.Reminders.csproj" />
     <ProjectReference Include="..\..\..\src\Aluki.Runtime.Abstractions\Aluki.Runtime.Abstractions.csproj" />
   </ItemGroup>
 

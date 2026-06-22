@@ -8,6 +8,33 @@
 
 **Organization**: Tasks are grouped by user story and ordered by dependency so each story is independently implementable and testable.
 
+## Implementation status & adaptations (PR1 — 2026-06-22)
+
+Adapted to the real codebase (same deviations as SB-004):
+
+- **Project**: implemented in a new `src/Aluki.Runtime.Reminders` project (mirrors
+  `Memory`/`Extraction`), not in `Host`.
+- **Migration**: single `db/migrations/010_reminders.sql` (the spec's `004..007`
+  numbers were already taken). Added to the deploy loop + `DbCaptureFixture`.
+- **Scheduling**: **timer-triggered sweep** (`ReminderSweepFunction`, every minute)
+  instead of Durable Functions — durable orchestration with per-reminder timers and
+  retry-backoff is a documented follow-up. Cross-tenant claim uses a SECURITY DEFINER
+  `app.claim_due_reminders` function (RLS-safe, SKIP LOCKED).
+- **Delivery**: pluggable `IReminderDeliveryChannel` with a logging/persisting stub
+  (`LoggingReminderDeliveryChannel`); a real outbound channel (WhatsApp/in-app) plugs
+  in later with no engine change.
+
+**Done in PR1**: foundation (schema, contracts, store, scope guard, DI), **US1
+one-shot** (create/list/snooze/cancel + lifecycle audit), creation-time **quota
+enforcement** (US3 core), and the fire-sweep with idempotent delivery + terminal
+`delivered`/`delivery_failed`/`expired_undelivered`. Tests: `ReminderPolicyTests`
+(unit), `ReminderContractTests` (contract), `ReminderLifecycleIntegrationTests`
+(integration: create/idempotency/snooze/cancel/quota/sweep).
+
+**Deferred to follow-up PRs**: US2 recurring (recurrence calculator + DST; create
+currently returns `422 unsupported_recurrence`), multi-attempt retry backoff
+(5s/25s/125s), and the standalone telemetry emitter.
+
 ## Phase 1: Setup (Shared Infrastructure)
 
 **Purpose**: Prepare projects, dependencies, and configuration shared by all reminder stories.

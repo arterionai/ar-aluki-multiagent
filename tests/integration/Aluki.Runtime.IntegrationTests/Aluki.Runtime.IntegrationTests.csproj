@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\..\src\Aluki.Runtime.Capture\Aluki.Runtime.Capture.csproj" />
     <ProjectReference Include="..\..\..\src\Aluki.Runtime.Memory\Aluki.Runtime.Memory.csproj" />
     <ProjectReference Include="..\..\..\src\Aluki.Runtime.Extraction\Aluki.Runtime.Extraction.csproj" />
+    <ProjectReference Include="..\..\..\src\Aluki.Runtime.Reminders\Aluki.Runtime.Reminders.csproj" />
     <ProjectReference Include="..\..\..\src\Aluki.Runtime.Abstractions\Aluki.Runtime.Abstractions.csproj" />
   </ItemGroup>
 
