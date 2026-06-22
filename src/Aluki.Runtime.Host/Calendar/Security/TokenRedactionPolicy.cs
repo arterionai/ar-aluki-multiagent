@@ -11,10 +11,10 @@ public static partial class TokenRedactionPolicy
     public static string Redact(string json)
     {
         if (string.IsNullOrEmpty(json)) return json;
-        var result = json;
-        foreach (var key in RedactedKeys)
-            result = TokenValuePattern().Replace(result, $@"""{key}"":""[REDACTED]""");
-        return result;
+        // Replace the value of any sensitive field in a single pass, preserving the
+        // original field name via the captured key ($1). Looping with one hardcoded
+        // key per iteration renamed every matched field to that loop's key.
+        return TokenValuePattern().Replace(json, @"""$1"":""[REDACTED]""");
     }
 
     public static Dictionary<string, object?> RedactDictionary(Dictionary<string, object?> payload)
