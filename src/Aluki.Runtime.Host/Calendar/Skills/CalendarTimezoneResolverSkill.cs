@@ -63,7 +63,8 @@ public sealed class CalendarTimezoneResolverSkill
         var zone = TzProvider.GetZoneOrNull(ianaTimezone);
         if (zone is null) return false;
 
-        if (!LocalDateTime.TryParse(localDateTimeText, out var localDt)) return false;
+        if (!DateTime.TryParse(localDateTimeText, null, System.Globalization.DateTimeStyles.NoCurrentDateDefault, out var dt)) return false;
+        var localDt = LocalDateTime.FromDateTime(dt);
 
         var mapping = zone.MapLocal(localDt);
         return mapping.Count == 2; // two UTC instants = DST ambiguity
@@ -78,7 +79,8 @@ public sealed class CalendarTimezoneResolverSkill
         var zone = TzProvider.GetZoneOrNull(ianaTimezone);
         if (zone is null) return null;
 
-        if (!LocalDateTime.TryParse(localDateTimeText, out var localDt)) return null;
+        if (!DateTime.TryParse(localDateTimeText, null, System.Globalization.DateTimeStyles.NoCurrentDateDefault, out var dt)) return null;
+        var localDt = LocalDateTime.FromDateTime(dt);
 
         var mapping = zone.MapLocal(localDt);
         if (mapping.Count == 0) return null; // skipped (spring-forward)

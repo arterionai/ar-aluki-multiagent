@@ -33,6 +33,11 @@ internal static class CalendarServiceExtensions
         // Provider adapters
         services.AddScoped<OutlookCalendarProvider>();
         services.AddScoped<ICalendarProvider>(sp => sp.GetRequiredService<OutlookCalendarProvider>());
+        services.AddScoped<GoogleCalendarProvider>();
+        services.AddScoped<ICalendarProvider>(sp => sp.GetRequiredService<GoogleCalendarProvider>());
+
+        // Cross-cutting provider policy
+        services.AddSingleton<CalendarProviderParityPolicy>();
 
         // US1 skills
         services.AddScoped<CalendarConnectSkill>();

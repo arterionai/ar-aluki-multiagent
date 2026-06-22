@@ -3,7 +3,7 @@ using Aluki.Runtime.Abstractions.Security;
 namespace Aluki.Runtime.Host.Calendar.Security;
 
 // Stub implementation — always permits. Real policy enforcement added in US1 auth lifecycle.
-internal sealed class DefaultCalendarScopeGuard : ICalendarScopeGuard
+public sealed class DefaultCalendarScopeGuard : ICalendarScopeGuard
 {
     public ValueTask<CalendarScopeDenial?> EvaluateConnectAsync(Guid tenantId, Guid contextId, Guid userId, CancellationToken ct = default)
         => ValueTask.FromResult<CalendarScopeDenial?>(null);

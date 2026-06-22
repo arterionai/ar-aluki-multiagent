@@ -196,7 +196,7 @@ internal sealed class PostgresCalendarRepository :
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<EventCreationRequestRecord?> GetAsync(Guid id, CancellationToken ct = default)
+    async Task<EventCreationRequestRecord?> IEventCreationRequestRepository.GetAsync(Guid id, CancellationToken ct)
     {
         await using var conn = await _factory.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
@@ -317,7 +317,7 @@ internal sealed class PostgresCalendarRepository :
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<CalendarEventOutcomeRecord?> GetAsync(Guid id, CancellationToken ct = default)
+    async Task<CalendarEventOutcomeRecord?> ICalendarOutcomeRepository.GetAsync(Guid id, CancellationToken ct)
     {
         await using var conn = await _factory.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(

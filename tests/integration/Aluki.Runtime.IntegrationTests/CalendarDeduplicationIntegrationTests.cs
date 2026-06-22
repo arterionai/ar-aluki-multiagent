@@ -1,4 +1,5 @@
 using Aluki.Runtime.Abstractions.Skills.Calendar;
+using Aluki.Runtime.Host.Calendar;
 using Aluki.Runtime.Host.Calendar.Skills;
 using Microsoft.Extensions.Options;
 using Xunit;
