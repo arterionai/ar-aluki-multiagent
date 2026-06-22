@@ -1,7 +1,9 @@
 using Aluki.Runtime.Abstractions.Memory;
+using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Capture.Persistence;
 using Aluki.Runtime.Memory.Chat;
 using Aluki.Runtime.Memory.Configuration;
+using Aluki.Runtime.Memory.Dispatch;
 using Aluki.Runtime.Memory.Embeddings;
 using Aluki.Runtime.Memory.Ingestion;
 using Aluki.Runtime.Memory.Recall;
@@ -35,6 +37,10 @@ public static class MemoryServiceCollectionExtensions
         // Replace the capture pipeline's no-op bridge with the real sink so captured
         // WhatsApp messages are promoted into recall-able personal memory.
         services.Replace(ServiceDescriptor.Singleton<IMemoryIngestionSink, MemoryIngestionSink>());
+
+        // Register the catch-all fallback domain agent (dispatched when no specific agent claims intent).
+        services.AddSingleton<MemoryDomainAgent>();
+        services.AddSingleton<IDomainAgent>(sp => sp.GetRequiredService<MemoryDomainAgent>());
 
         services.Configure<MemoryOptions>(configuration.GetSection(MemoryOptions.SectionName));
 

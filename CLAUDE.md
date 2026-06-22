@@ -129,7 +129,23 @@ documented intended behaviors without explicit instruction.
   in `Aluki.Runtime.Host/Skills/SuggestionsAdmin/`; HTTP in Functions (`SuggestionsAdminFunctions`).
   HTTP: `GET api/admin/suggestions`, `POST api/admin/suggestions/{id}/triage`,
   `POST api/admin/rewards/decide`. Config: uses `Postgres:*`.
-- Next per order: SB-009B, 010-012.
+- **SB-009B Domain Agents Runtime** — done (not yet deployed). Migration
+  `017_dispatch_audit.sql` (dispatch_audit_events + tenant RLS, WORM append-only).
+  **Architecture**: `IMessageDispatcher` evaluates all registered `IDomainAgent`
+  implementations in deterministic order (priority asc → AgentId lexical asc →
+  RegisteredAt asc). Tie-break recorded in audit ledger. `MemoryDomainAgent`
+  (priority=int.MaxValue) is the catch-all fallback; wraps `IMemoryIngestionSink`.
+  **Channel-agnostic**: `UnifiedMessage` produced by `NormalizeWhatsAppInboundSkill`
+  decouples domain agents from WhatsApp specifics — adding SMS/email requires no
+  domain agent changes. **Failure containment**: agent exceptions contained at dispatch
+  boundary (FR-010/FR-015); fallback is NOT used to mask a selected-agent failure.
+  **Audit**: `DispatchAuditRecord` persisted for every cycle (selected agent or fallback
+  reason, tie-break rationale, failure details, correlation metadata). `WhatsAppCaptureCoordinator`
+  now calls `IMessageDispatcher` (replacing direct `IMemoryIngestionSink`) as best-effort
+  post-capture. Abstractions in `Aluki.Runtime.Abstractions/Orchestration/Dispatch/`;
+  `MessageDispatcher`/`DispatchAuditStore`/`NullMessageDispatcher` in
+  `Aluki.Runtime.Capture/Dispatch/`; `MemoryDomainAgent` in `Aluki.Runtime.Memory/Dispatch/`.
+- Next per order: SB-010, SB-011, SB-012.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 

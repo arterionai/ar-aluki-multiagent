@@ -1,4 +1,5 @@
 using Aluki.Runtime.Abstractions.Channels.WhatsApp;
+using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Skills;
 
 namespace Aluki.Runtime.Capture.Skills;
@@ -58,7 +59,30 @@ public sealed class NormalizeWhatsAppInboundSkill : CaptureSkill
             ReceivedAtUtc: envelope.OccurredAtUtc);
 
         state.Normalized = normalized;
+        state.UnifiedMessage = BuildUnifiedMessage(envelope, normalized, state.CorrelationId);
         return Task.FromResult(Ok(state));
+    }
+
+    private static UnifiedMessage BuildUnifiedMessage(
+        WhatsAppInboundEnvelope envelope,
+        NormalizedCaptureMessage normalized,
+        string correlationId)
+    {
+        var mediaRefs = normalized.Media is { } m
+            ? new[] { new UnifiedMediaRef(
+                MediaId: m.ProviderMediaId ?? envelope.ProviderMessageId,
+                MediaKind: m.MediaType,
+                MimeType: m.ContentType,
+                FileSizeBytes: m.ByteLength) }
+            : Array.Empty<UnifiedMediaRef>();
+
+        return new UnifiedMessage(
+            MessageId: envelope.ProviderMessageId,
+            ChannelType: ChannelType.WhatsApp,
+            Text: normalized.MessageText,
+            MediaRefs: mediaRefs,
+            ReceivedAtUtc: envelope.OccurredAtUtc,
+            CorrelationId: correlationId);
     }
 
     private static string NormalizeMediaType(string? declared, string payloadType)

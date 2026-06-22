@@ -125,7 +125,8 @@ public sealed class DbCaptureFixture : IAsyncLifetime
             "013_link_capture.sql",
             "014_youtube_link_capture.sql",
             "015_feedback_suggestions.sql",
-            "016_suggestions_admin.sql"
+            "016_suggestions_admin.sql",
+            "017_dispatch_audit.sql"
         };
 
         await using var connection = new NpgsqlConnection(connectionString);
