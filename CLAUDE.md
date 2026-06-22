@@ -46,23 +46,25 @@ documented intended behaviors without explicit instruction.
     withheld from the surfaced set. Config `Extraction:ReceiptOcr:Endpoint/ApiKey/
     Deployment`, falling back to `Foundry:Endpoint/ApiKey` +
     `Foundry:VisionDeployment`/`ChatDeployment`.
-- **SB-005 Scheduled Reminders** — US1 + US2 done (US1 deployed; US2 pending merge).
-  Project `Aluki.Runtime.Reminders` (mirrors `Memory`/`Extraction`). Migration
+- **SB-005 Scheduled Reminders** — done (US1 deployed; US2 + retry pending merge).
+  Project `Aluki.Runtime.Reminders` (mirrors `Memory`/`Extraction`). Migrations
   `010_reminders.sql` (reminders/recurrence_rules/delivery_attempts/audit/quotas +
-  tenant RLS + SECURITY DEFINER `app.claim_due_reminders`). One-shot + **recurring**
-  (daily/weekly/monthly) create/list/snooze/cancel + creation-time quota enforcement
-  + lifecycle audit. **Scheduling = timer-sweep** (`ReminderSweepFunction`, every
-  minute) not Durable Functions (follow-up); cross-tenant claim via
-  `app.claim_due_reminders` (SKIP LOCKED). **Delivery = pluggable
-  `IReminderDeliveryChannel`** with a logging/persisting stub
-  (`LoggingReminderDeliveryChannel`) until a real outbound channel exists.
-  **Recurrence**: DST-safe `ReminderRecurrenceCalculator` (IANA tz, local time held
-  across DST, day-31→last-day, `until_date` end); the sweep re-arms recurring
-  reminders to the next occurrence after delivery. HTTP (Functions): `POST/GET
-  api/reminders`, `POST api/reminders/{id}/snooze`, `DELETE api/reminders/{id}`.
-  Deferred: multi-attempt retry backoff. Config `Reminders:*`.
-- Next per order: SB-005 (retry backoff, optional), SB-006, SB-009A, SB-008B,
-  SB-007/008A, SB-009B, 010-012.
+  tenant RLS + SECURITY DEFINER `app.claim_due_reminders`) and
+  `011_reminder_retries.sql` (`delivery_attempt_count` + `next_retry_utc`; claim
+  also harvests due retries). One-shot + **recurring** (daily/weekly/monthly)
+  create/list/snooze/cancel + creation-time quota enforcement + lifecycle audit.
+  **Scheduling = timer-sweep** (`ReminderSweepFunction`, every minute) not Durable
+  Functions (follow-up); cross-tenant claim via `app.claim_due_reminders`
+  (SKIP LOCKED). **Delivery = pluggable `IReminderDeliveryChannel`** with a
+  logging/persisting stub (`LoggingReminderDeliveryChannel`) until a real outbound
+  channel exists. **Recurrence**: DST-safe `ReminderRecurrenceCalculator` (IANA tz,
+  local time held across DST, day-31→last-day, `until_date` end); the sweep re-arms
+  recurring reminders to the next occurrence after delivery. **Retry**: transient
+  failures retry with backoff (`ReminderRetryPolicy` 5s/25s/125s) up to 3 attempts,
+  then terminal `delivery_failed` (sub-minute backoff rounds to the sweep tick —
+  Durable-Functions follow-up). HTTP (Functions): `POST/GET api/reminders`,
+  `POST api/reminders/{id}/snooze`, `DELETE api/reminders/{id}`. Config `Reminders:*`.
+- Next per order: SB-006, SB-009A, SB-008B, SB-007/008A, SB-009B, 010-012.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 

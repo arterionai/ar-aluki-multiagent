@@ -39,8 +39,18 @@ to `scheduled`), one-shots stay terminal. Tests: `ReminderRecurrenceCalculatorTe
 (16 unit incl. DST), recurring validation in `ReminderContractTests`, and recurring
 create + reschedule in `ReminderLifecycleIntegrationTests`.
 
-**Deferred to follow-up PRs**: multi-attempt retry backoff (5s/25s/125s) and the
-standalone telemetry emitter.
+**Done in PR3 — delivery retry backoff**: migration `011_reminder_retries.sql`
+(reminder `delivery_attempt_count` + `next_retry_utc`; the claim function also
+harvests due retries). Transient failures retry with exponential backoff
+(`ReminderRetryPolicy` 5s/25s/125s) up to `MaxDeliveryAttempts` (3); permanent
+failures and exhausted retries go terminal `delivery_failed`. NOTE: the sweep runs
+~every minute, so sub-minute backoffs effectively round up to the next tick — the
+schedule is a lower bound; exact sub-minute timing is a Durable-Functions follow-up.
+Tests: backoff in `ReminderPolicyTests`, retry-then-deliver + exhaustion in
+`ReminderLifecycleIntegrationTests`.
+
+**SB-005 complete** (US1 + US2 + US3 quota + snooze + retry). Remaining optional:
+standalone telemetry emitter; sub-minute retry precision via Durable Functions.
 
 ## Phase 1: Setup (Shared Infrastructure)
 

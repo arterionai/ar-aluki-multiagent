@@ -212,6 +212,65 @@ public sealed class ReminderLifecycleIntegrationTests
         Assert.True(await CountAudit(seed.TenantId, created.Reminder.ReminderId, ReminderAuditEventType.Delivered) >= 1);
     }
 
+    [Fact]
+    public async Task Transient_failure_retries_then_delivers()
+    {
+        if (!_fixture.Available)
+        {
+            return;
+        }
+
+        var seed = await _fixture.SeedPrincipalAsync();
+        var clock = new FakeClock(DateTimeOffset.Parse("2026-07-01T10:00:00Z"));
+        var channel = new ScriptedChannel(
+            new ReminderDeliveryResult(DeliveryStatus.TransientFailure, null, DeliveryFailureCategory.ServiceUnavailable, "temp"),
+            new ReminderDeliveryResult(DeliveryStatus.Delivered, "ok"));
+        var service = BuildService(clock, channel);
+        var created = Assert.IsType<ReminderResponse>(
+            (await service.CreateAsync(CreateRequest(seed, "Call Ana", clock.GetUtcNow().AddMinutes(5)), CancellationToken.None)).Body);
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+        await service.FireDueAsync(CancellationToken.None);
+        // After a transient failure the reminder stays in-flight, armed for retry.
+        Assert.Equal("firing", await ReminderStatusOf(seed.TenantId, created.Reminder!.ReminderId));
+
+        clock.Advance(TimeSpan.FromSeconds(10)); // past the 5s backoff
+        await service.FireDueAsync(CancellationToken.None);
+
+        Assert.Equal(2, channel.Calls);
+        Assert.Equal("delivered", await ReminderStatusOf(seed.TenantId, created.Reminder.ReminderId));
+        Assert.Equal(2, await CountDeliveryAttempts(seed.TenantId, created.Reminder.ReminderId));
+    }
+
+    [Fact]
+    public async Task Transient_failure_exhausts_to_delivery_failed()
+    {
+        if (!_fixture.Available)
+        {
+            return;
+        }
+
+        var seed = await _fixture.SeedPrincipalAsync();
+        var clock = new FakeClock(DateTimeOffset.Parse("2026-07-01T10:00:00Z"));
+        var fail = new ReminderDeliveryResult(DeliveryStatus.TransientFailure, null, DeliveryFailureCategory.NetworkTimeout, "down");
+        var channel = new ScriptedChannel(fail, fail, fail);
+        var service = BuildService(clock, channel);
+        var created = Assert.IsType<ReminderResponse>(
+            (await service.CreateAsync(CreateRequest(seed, "Call Ana", clock.GetUtcNow().AddMinutes(5)), CancellationToken.None)).Body);
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+        await service.FireDueAsync(CancellationToken.None);   // attempt 1 -> retry @ +5s
+        clock.Advance(TimeSpan.FromSeconds(10));
+        await service.FireDueAsync(CancellationToken.None);   // attempt 2 -> retry @ +25s
+        clock.Advance(TimeSpan.FromSeconds(30));
+        await service.FireDueAsync(CancellationToken.None);   // attempt 3 -> exhausted
+
+        Assert.Equal(3, channel.Calls);
+        Assert.Equal("delivery_failed", await ReminderStatusOf(seed.TenantId, created.Reminder!.ReminderId));
+        Assert.Equal(3, await CountDeliveryAttempts(seed.TenantId, created.Reminder.ReminderId));
+        Assert.True(await CountAudit(seed.TenantId, created.Reminder.ReminderId, ReminderAuditEventType.DeliveryFailed) >= 1);
+    }
+
     private ReminderService BuildService(TimeProvider clock, IReminderDeliveryChannel? channel = null)
     {
         var factory = BuildFactory(_fixture.ConnectionString!);
@@ -328,6 +387,22 @@ public sealed class ReminderLifecycleIntegrationTests
         {
             Calls++;
             return Task.FromResult(new ReminderDeliveryResult(DeliveryStatus.Delivered, $"notif-{request.ReminderId:N}"));
+        }
+    }
+
+    /// <summary>Returns a scripted sequence of delivery outcomes (then delivers).</summary>
+    private sealed class ScriptedChannel : IReminderDeliveryChannel
+    {
+        private readonly Queue<ReminderDeliveryResult> _results;
+        public int Calls { get; private set; }
+
+        public ScriptedChannel(params ReminderDeliveryResult[] results) => _results = new Queue<ReminderDeliveryResult>(results);
+
+        public Task<ReminderDeliveryResult> DeliverAsync(ReminderDeliveryRequest request, CancellationToken cancellationToken)
+        {
+            Calls++;
+            var result = _results.Count > 0 ? _results.Dequeue() : new ReminderDeliveryResult(DeliveryStatus.Delivered, "ok");
+            return Task.FromResult(result);
         }
     }
 }

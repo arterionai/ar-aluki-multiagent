@@ -51,4 +51,28 @@ public sealed class ReminderPolicyTests
         var now = DateTimeOffset.Parse("2026-07-01T10:00:00Z");
         Assert.Equal(now.AddMinutes(15), ReminderSnoozePolicy.NextFireTime(now, 900));
     }
+
+    [Theory]
+    [InlineData(1, 5)]
+    [InlineData(2, 25)]
+    [InlineData(3, 125)]
+    public void Retry_backoff_is_exponential(int failedAttempt, double expectedSeconds)
+    {
+        Assert.Equal(expectedSeconds, ReminderRetryPolicy.BackoffSeconds(failedAttempt));
+    }
+
+    [Fact]
+    public void Retry_next_time_arms_when_attempts_remain()
+    {
+        var now = DateTimeOffset.Parse("2026-07-01T10:00:00Z");
+        var next = ReminderRetryPolicy.NextRetry(now, failedAttemptNumber: 1, maxAttempts: 3);
+        Assert.Equal(now.AddSeconds(5), next);
+    }
+
+    [Fact]
+    public void Retry_next_time_is_null_when_exhausted()
+    {
+        var now = DateTimeOffset.Parse("2026-07-01T10:00:00Z");
+        Assert.Null(ReminderRetryPolicy.NextRetry(now, failedAttemptNumber: 3, maxAttempts: 3));
+    }
 }
