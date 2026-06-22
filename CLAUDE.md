@@ -160,7 +160,23 @@ documented intended behaviors without explicit instruction.
   `Aluki.Runtime.Host/Skills/Governance/`; HTTP in Functions (`GovernanceFunctions`).
   HTTP: `POST api/governance/policy/evaluate`, `GET/POST api/governance/policy/rules`,
   `POST api/governance/consent/grant|revoke`, `GET api/governance/consent/check|by-grantor|by-grantee`.
-- Next per order: SB-010, SB-011.
+- **SB-011 Semantic Graph** — done (not yet deployed). Migration `019_semantic_graph.sql`
+  (semantic_entities/semantic_entity_aliases/semantic_relationships/semantic_entity_facts +
+  tenant RLS). **Entity resolution**: LLM-driven extraction via `IChatModelRouter` (Azure AI
+  Foundry); deduplication by alias/canonical_name case-insensitive lookup; new entities created
+  and aliases registered on first encounter. **Relationship types**: worksAt, owns, mentions,
+  collaboratesWith, manages, generic (archived on lifecycle change — immutable audit trail).
+  **Graph traversal**: BFS hop-by-hop (max 3 hops); bidirectional index maintained.
+  **Entity merge**: cascading update of all relationship references + alias copy → source deactivated.
+  **Entity-fact links**: provenance table `semantic_entity_facts` links entities to `memory_artifact`
+  fact IDs (idempotent upsert). `Aluki.Runtime.Host` now references `Aluki.Runtime.Memory`
+  (adds IChatModelRouter). Implementation split: contracts/interfaces in
+  `Aluki.Runtime.Abstractions/SemanticGraph/`; `SemanticGraphRepository`/`EntityResolutionService`/
+  `GraphTraversalService` + `AddSemanticGraph()` in `Aluki.Runtime.Host/Skills/SemanticGraph/`;
+  HTTP in Functions (`SemanticGraphFunctions`).
+  HTTP: `POST api/semantic-graph/resolve`, `GET/POST api/semantic-graph/entities|entities/{id}|entities/merge`,
+  `GET api/semantic-graph/traverse|path`, `POST api/semantic-graph/relationships/{id}/archive`.
+- Next per order: SB-010.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 

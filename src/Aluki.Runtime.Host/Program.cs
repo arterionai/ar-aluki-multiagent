@@ -4,6 +4,7 @@ using Aluki.Runtime.Host.Calendar;
 using Aluki.Runtime.Host.Skills.Feedback;
 using Aluki.Runtime.Host.Skills.Governance;
 using Aluki.Runtime.Host.Skills.LinkCapture;
+using Aluki.Runtime.Host.Skills.SemanticGraph;
 using Aluki.Runtime.Host.Skills.SuggestionsAdmin;
 using Aluki.Runtime.Host.Skills.YouTubeLinks;
 using Aluki.Runtime.Host.Channels.WhatsApp;
@@ -47,6 +48,9 @@ builder.Services.AddSuggestionsAdmin(builder.Configuration);
 
 // Governance & Security (SB-012): consent, policy rules, decision engine.
 builder.Services.AddGovernance(builder.Configuration);
+
+// Semantic Graph (SB-011): entity resolution, relationship extraction, graph traversal.
+builder.Services.AddSemanticGraph(builder.Configuration);
 
 // Background heartbeat (existing runtime worker)
 builder.Services.AddHostedService<Worker>();
