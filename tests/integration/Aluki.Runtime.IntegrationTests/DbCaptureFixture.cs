@@ -120,7 +120,8 @@ public sealed class DbCaptureFixture : IAsyncLifetime
             "007_personal_memory.sql",
             "009_ai_extraction.sql",
             "010_reminders.sql",
-            "011_reminder_retries.sql"
+            "011_reminder_retries.sql",
+            "012_delegated_reminders.sql"
         };
 
         await using var connection = new NpgsqlConnection(connectionString);

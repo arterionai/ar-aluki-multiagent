@@ -25,6 +25,7 @@
     <ProjectReference Include="..\Aluki.Runtime.Memory\Aluki.Runtime.Memory.csproj" />
     <ProjectReference Include="..\Aluki.Runtime.Extraction\Aluki.Runtime.Extraction.csproj" />
     <ProjectReference Include="..\Aluki.Runtime.Reminders\Aluki.Runtime.Reminders.csproj" />
+    <ProjectReference Include="..\Aluki.Runtime.DelegatedReminders\Aluki.Runtime.DelegatedReminders.csproj" />
   </ItemGroup>
 
 </Project>

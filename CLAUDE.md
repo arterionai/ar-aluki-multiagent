@@ -64,7 +64,25 @@ documented intended behaviors without explicit instruction.
   then terminal `delivery_failed` (sub-minute backoff rounds to the sweep tick —
   Durable-Functions follow-up). HTTP (Functions): `POST/GET api/reminders`,
   `POST api/reminders/{id}/snooze`, `DELETE api/reminders/{id}`. Config `Reminders:*`.
-- Next per order: SB-006, SB-009A, SB-008B, SB-007/008A, SB-009B, 010-012.
+- **SB-006 Delegated Reminders** — done (not yet deployed). Project
+  `Aluki.Runtime.DelegatedReminders` (mirrors SB-005). Migration
+  `012_delegated_reminders.sql` (delegated_reminders/delegated_recipient_contact/
+  delegated_consent_registry/delegated_delivery_attempt/delegated_audit_event +
+  tenant RLS + SECURITY DEFINER `app.claim_due_delegated_reminders`). Sender→
+  recipient reminders with 3-tier recipient resolution (Tier1=known WhatsApp handle,
+  Tier2=phone-only, Tier3=unknown→awaiting_consent). **Anti-spam**: 10/day rolling
+  window per sender (429 on breach). **Cancellation window**: 30s from due time
+  (generated column `cancel_deadline_utc`). **Retry**: 1/2/4/8/16s backoff (31s
+  total), up to 5 attempts; permanent failures notify sender (stub, WhatsApp follow-up).
+  **Consent gating**: Tier3 held as `awaiting_consent`; promoted to `scheduled` on
+  `opted_in` upsert. Re-verified at delivery time. **Sweep**: `DelegatedReminderSweepFunction`
+  (every minute), claims fresh-due + retry-due atomically via SECURITY DEFINER.
+  **Delivery = pluggable `IDelegatedReminderDeliveryChannel`** with logging stub
+  (`LoggingDelegatedReminderDeliveryChannel`). Idempotency key: external ID or
+  SHA256(`userId:recipient:dueUnixSeconds:contentLower`). HTTP (Functions):
+  `POST/GET api/delegated-reminders`, `DELETE api/delegated-reminders/{id}`.
+  Config `DelegatedReminders:*`.
+- Next per order: SB-009A, SB-008B, SB-007/008A, SB-009B, 010-012.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 
