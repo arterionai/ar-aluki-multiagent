@@ -1,6 +1,7 @@
 using Aluki.Runtime.Capture;
 using Aluki.Runtime.Host;
 using Aluki.Runtime.Host.Calendar;
+using Aluki.Runtime.Host.Skills.Billing;
 using Aluki.Runtime.Host.Skills.Feedback;
 using Aluki.Runtime.Host.Skills.Governance;
 using Aluki.Runtime.Host.Skills.LinkCapture;
@@ -51,6 +52,9 @@ builder.Services.AddGovernance(builder.Configuration);
 
 // Semantic Graph (SB-011): entity resolution, relationship extraction, graph traversal.
 builder.Services.AddSemanticGraph(builder.Configuration);
+
+// Billing & Package Management (SB-010): entitlement, ledger, invoices, credits.
+builder.Services.AddBilling(builder.Configuration);
 
 // Background heartbeat (existing runtime worker)
 builder.Services.AddHostedService<Worker>();
