@@ -1,7 +1,7 @@
 using System.Net;
 using Aluki.Runtime.Abstractions.Skills.Calendar;
-using Aluki.Runtime.Host.Calendar.Providers;
-using Aluki.Runtime.Host.Calendar.Skills;
+using Aluki.Runtime.Calendar.Providers;
+using Aluki.Runtime.Calendar.Skills;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -178,9 +178,9 @@ public sealed class CalendarGoogleParityIntegrationTests
         string? accessToken = "access-xyz",
         (HttpStatusCode Status, string Json)? response = null)
     {
-        var opts = Options.Create(new Host.Calendar.CalendarOptions
+        var opts = Options.Create(new Calendar.CalendarOptions
         {
-            Google = new Host.Calendar.GoogleProviderOptions { Enabled = enabled }
+            Google = new Calendar.GoogleProviderOptions { Enabled = enabled }
         });
         var r = response ?? (HttpStatusCode.OK, """{"id":"g"}""");
         var http = new HttpClient(new StubHttpMessageHandler(r.Status, r.Json));
@@ -192,9 +192,9 @@ public sealed class CalendarGoogleParityIntegrationTests
         string? accessToken = "access-xyz",
         (HttpStatusCode Status, string Json)? response = null)
     {
-        var opts = Options.Create(new Host.Calendar.CalendarOptions
+        var opts = Options.Create(new Calendar.CalendarOptions
         {
-            Outlook = new Host.Calendar.OutlookProviderOptions { Enabled = enabled }
+            Outlook = new Calendar.OutlookProviderOptions { Enabled = enabled }
         });
         var r = response ?? (HttpStatusCode.Created, """{"id":"o"}""");
         var http = new HttpClient(new StubHttpMessageHandler(r.Status, r.Json));

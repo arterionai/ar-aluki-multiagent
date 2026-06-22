@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using Aluki.Runtime.Abstractions.Skills.Calendar;
-using Aluki.Runtime.Host.Calendar.Providers;
-using Aluki.Runtime.Host.Calendar.Security;
+using Aluki.Runtime.Calendar.Providers;
+using Aluki.Runtime.Calendar.Security;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 

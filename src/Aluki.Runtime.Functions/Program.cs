@@ -1,3 +1,4 @@
+using Aluki.Runtime.Calendar;
 using Aluki.Runtime.Capture;
 using Aluki.Runtime.Capture.Channels.WhatsApp;
 using Aluki.Runtime.Capture.Media;
@@ -14,6 +15,7 @@ var host = new HostBuilder()
         services.AddWhatsAppCapture(context.Configuration);
         services.AddPersonalMemory(context.Configuration);
         services.AddAiExtraction(context.Configuration);
+        services.AddCalendarIntegration(context.Configuration);
 
         // Outbound delivery feedback (read receipt + typing indicator) via Graph API.
         services.AddHttpClient<IWhatsAppMessenger, MetaWhatsAppMessenger>();

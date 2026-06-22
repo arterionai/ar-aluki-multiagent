@@ -1,8 +1,8 @@
 using System.Net;
 using System.Text;
 using Aluki.Runtime.Abstractions.Skills.Calendar;
-using Aluki.Runtime.Host.Calendar.Providers;
-using Aluki.Runtime.Host.Calendar.Security;
+using Aluki.Runtime.Calendar.Providers;
+using Aluki.Runtime.Calendar.Security;
 
 namespace Aluki.Runtime.IntegrationTests;
 

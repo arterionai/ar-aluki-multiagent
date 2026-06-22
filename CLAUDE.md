@@ -6,8 +6,9 @@ documented intended behaviors without explicit instruction.
 ## Solution layout
 
 - `Aluki.Runtime.slnx` — projects: `Abstractions`, `Capture`, `Memory`,
-  `Functions` (Azure Functions isolated worker, the deployed unit), `Host`
-  (ASP.NET Core, not deployed), plus `tests/{unit,contract,integration}`.
+  `Extraction`, `Calendar` (calendar engine shared lib), `Functions` (Azure
+  Functions isolated worker, the deployed unit), `Host` (ASP.NET Core, not
+  deployed), plus `tests/{unit,contract,integration}`.
 - .NET 10 (`net10.0`), C#. Local SDK at `/tmp/dotnet`.
 - Build: `dotnet build Aluki.Runtime.slnx -c Release`.
 - Tests by category trait: `Unit`, `Contract`, `Integration`. Integration tests
@@ -42,10 +43,15 @@ documented intended behaviors without explicit instruction.
     `Calendar:Google:{Enabled,ClientId,ClientSecret,Scopes}`. Register the redirect
     URI `{CallbackBaseUrl}/api/calendar/callback` on each provider OAuth app (multiple
     URIs allowed: localhost for Host-local testing + the deployed URL).
-  - **Still in Host only (not deployed)**: the calendar engine lives in
-    `Aluki.Runtime.Host`; there is no calendar HTTP Function in the deployed worker
-    yet. Exposing it in `Aluki.Runtime.Functions` (extract to a shared lib + HTTP
-    triggers) remains a follow-up before prod use.
+  - **Deployed in the Functions worker**: the calendar engine was extracted from
+    `Aluki.Runtime.Host` into a shared library `Aluki.Runtime.Calendar` (namespace
+    `Aluki.Runtime.Calendar.*`, mirrors `Memory`/`Extraction`; `AddCalendarIntegration`).
+    Both `Host` (minimal-API `CalendarEndpoints`) and `Functions` reference it. HTTP
+    triggers in the deployed worker (`CalendarFunctions`): `POST api/calendar/connect`,
+    `GET api/calendar/callback` (Anonymous — providers redirect here), `POST
+    api/calendar/disconnect`, `POST api/calendar/create_event`. The deployed env needs
+    the `Calendar:*` app settings/Key Vault refs (incl. `TokenEncryptionKey` + per-provider
+    `ClientSecret`) and the provider redirect URI set to `{FunctionBaseUrl}/api/calendar/callback`.
 - **SB-004 AI Extraction** — US1/US2/US3 done (not yet deployed). Project
   `Aluki.Runtime.Extraction` (mirrors `Memory`). Migration `009_ai_extraction.sql`
   (jobs/results/fields/audit + tenant RLS). US1 (audio→transcription+structured

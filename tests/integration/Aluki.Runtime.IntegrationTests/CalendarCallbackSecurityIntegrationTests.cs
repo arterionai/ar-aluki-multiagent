@@ -1,7 +1,7 @@
 using Aluki.Runtime.Abstractions.Skills.Calendar;
-using Aluki.Runtime.Host.Calendar.Audit;
-using Aluki.Runtime.Host.Calendar.Observability;
-using Aluki.Runtime.Host.Calendar.Skills;
+using Aluki.Runtime.Calendar.Audit;
+using Aluki.Runtime.Calendar.Observability;
+using Aluki.Runtime.Calendar.Skills;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 

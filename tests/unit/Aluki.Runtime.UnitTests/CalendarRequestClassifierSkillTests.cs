@@ -1,4 +1,4 @@
-using Aluki.Runtime.Host.Calendar.Skills;
+using Aluki.Runtime.Calendar.Skills;
 using Xunit;
 
 namespace Aluki.Runtime.UnitTests;

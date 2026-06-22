@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Aluki.Runtime.Abstractions/Aluki.Runtime.Abstractions.csproj" />
+    <Project Path="src/Aluki.Runtime.Calendar/Aluki.Runtime.Calendar.csproj" />
     <Project Path="src/Aluki.Runtime.Capture/Aluki.Runtime.Capture.csproj" />
     <Project Path="src/Aluki.Runtime.Memory/Aluki.Runtime.Memory.csproj" />
     <Project Path="src/Aluki.Runtime.Extraction/Aluki.Runtime.Extraction.csproj" />

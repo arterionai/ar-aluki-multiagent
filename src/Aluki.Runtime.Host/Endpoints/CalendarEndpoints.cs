@@ -1,5 +1,5 @@
 using Aluki.Runtime.Abstractions.Skills.Calendar;
-using Aluki.Runtime.Host.Calendar.Skills;
+using Aluki.Runtime.Calendar.Skills;
 using Microsoft.Extensions.Logging;
 using System.Text.Json.Serialization;
 

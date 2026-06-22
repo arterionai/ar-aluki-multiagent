@@ -1,6 +1,6 @@
 using Aluki.Runtime.Capture;
 using Aluki.Runtime.Host;
-using Aluki.Runtime.Host.Calendar;
+using Aluki.Runtime.Calendar;
 using Aluki.Runtime.Host.Channels.WhatsApp;
 using Aluki.Runtime.Host.Endpoints;
 using Azure.Identity;

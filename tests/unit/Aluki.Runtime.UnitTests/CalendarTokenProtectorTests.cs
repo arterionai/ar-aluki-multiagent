@@ -1,5 +1,5 @@
 using System.Security.Cryptography;
-using Aluki.Runtime.Host.Calendar.Security;
+using Aluki.Runtime.Calendar.Security;
 using Xunit;
 
 namespace Aluki.Runtime.UnitTests;

@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Aluki.Runtime.Abstractions\Aluki.Runtime.Abstractions.csproj" />
+    <ProjectReference Include="..\Aluki.Runtime.Calendar\Aluki.Runtime.Calendar.csproj" />
     <ProjectReference Include="..\Aluki.Runtime.Capture\Aluki.Runtime.Capture.csproj" />
   </ItemGroup>
 </Project>
