@@ -2,6 +2,7 @@ using Aluki.Runtime.Capture;
 using Aluki.Runtime.Host;
 using Aluki.Runtime.Host.Calendar;
 using Aluki.Runtime.Host.Channels.WhatsApp;
+using Aluki.Runtime.Host.Endpoints;
 using Azure.Identity;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -36,6 +37,7 @@ var app = builder.Build();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "aluki-runtime-host" }));
 app.MapWhatsAppInbound();
+app.MapCalendarEndpoints();
 
 app.Run();
 
