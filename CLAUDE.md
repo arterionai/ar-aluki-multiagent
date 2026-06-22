@@ -107,7 +107,29 @@ documented intended behaviors without explicit instruction.
   interfaces/canonicalizer in `Aluki.Runtime.Abstractions/Skills/YouTubeLinks`; repository/services/
   stubs in `Aluki.Runtime.Host/Skills/YouTubeLinks/`; HTTP in Functions (`CaptureYoutubeLinksFunction`).
   HTTP: `POST api/v1/skills/youtube-links/capture`. Config: uses `Postgres:*`.
-- Next per order: SB-007/008A, SB-009B, 010-012.
+- **SB-007 Feedback Suggestions Capture** — done (not yet deployed). Migration
+  `015_feedback_suggestions.sql` (suggestions/suggestion_attachments/suggestion_state_transitions
+  + tenant+user RLS). Keyword-based intent detection stub. 30-min context window per tenant-user
+  (one active at a time). Attachment MIME/size validation (audio ≤50MB mp4/webm/ogg/mpeg,
+  photo ≤10MB JPEG/PNG, text ≤5KB inline). Lifecycle: captured→enriched→sent_user→archived
+  (one-way). Archival sweep timer (hourly, 90-day cutoff). Idempotency: `(message_id+payload_hash)`
+  partial unique index on active states. Implementation split: contracts/interfaces in
+  `Aluki.Runtime.Abstractions/Skills/Feedback`; repository/service in
+  `Aluki.Runtime.Host/Skills/Feedback/`; HTTP in Functions (`FeedbackFunctions`).
+  HTTP: `POST api/skills/feedback/capture|attach`. Config: uses `Postgres:*`.
+- **SB-008A Suggestions Admin and Rewards** — done (not yet deployed). Migration
+  `016_suggestions_admin.sql` (suggestion_admin_queue/suggestion_admin_audit_ledger/
+  reward_entitlement_ledger/reward_notification_delivery/reward_decision_record + tenant RLS,
+  no user filter — staff-wide). RBAC: AdminReviewer (captured→under_review, category/priority),
+  AdminApprover (all transitions), AdminAuditor (read-only). Audit ledger: WORM append-only
+  with bigserial sequence + SHA256 record_hash. Rewards: idempotency boundary
+  (tenant+user+suggestion+rule+sourceEventId), Granted/Duplicate/Conflict outcomes. Notification
+  sweep: 1/5/15/60/360min backoff, dead-letter after 5 attempts (stub delivery). Implementation
+  split: contracts in `Aluki.Runtime.Abstractions/Skills/SuggestionsAdmin`; repository/services
+  in `Aluki.Runtime.Host/Skills/SuggestionsAdmin/`; HTTP in Functions (`SuggestionsAdminFunctions`).
+  HTTP: `GET api/admin/suggestions`, `POST api/admin/suggestions/{id}/triage`,
+  `POST api/admin/rewards/decide`. Config: uses `Postgres:*`.
+- Next per order: SB-009B, 010-012.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 

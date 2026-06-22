@@ -3,6 +3,8 @@ using Aluki.Runtime.Capture.Channels.WhatsApp;
 using Aluki.Runtime.Capture.Media;
 using Aluki.Runtime.Extraction;
 using Aluki.Runtime.Functions.Media;
+using Aluki.Runtime.Host.Skills.Feedback;
+using Aluki.Runtime.Host.Skills.SuggestionsAdmin;
 using Aluki.Runtime.Memory;
 using Aluki.Runtime.DelegatedReminders;
 using Aluki.Runtime.Reminders;
@@ -18,6 +20,8 @@ var host = new HostBuilder()
         services.AddAiExtraction(context.Configuration);
         services.AddReminders(context.Configuration);
         services.AddDelegatedReminders(context.Configuration);
+        services.AddFeedbackCapture(context.Configuration);
+        services.AddSuggestionsAdmin(context.Configuration);
 
         // Outbound delivery feedback (read receipt + typing indicator) via Graph API.
         services.AddHttpClient<IWhatsAppMessenger, MetaWhatsAppMessenger>();
