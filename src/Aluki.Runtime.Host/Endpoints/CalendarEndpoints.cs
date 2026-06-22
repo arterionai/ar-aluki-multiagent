@@ -1,5 +1,7 @@
 using Aluki.Runtime.Abstractions.Skills.Calendar;
 using Aluki.Runtime.Host.Calendar.Skills;
+using Microsoft.Extensions.Logging;
+using System.Text.Json.Serialization;
 
 namespace Aluki.Runtime.Host.Endpoints;
 
@@ -17,6 +19,7 @@ public static class CalendarEndpoints
     private static async Task<IResult> HandleCreateEventAsync(
         CalendarCreateEventHttpRequest body,
         CalendarCreateSkill skill,
+        ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (body.TenantId == Guid.Empty || body.ContextId == Guid.Empty || body.UserId == Guid.Empty)
@@ -33,7 +36,21 @@ public static class CalendarEndpoints
             ProviderHint: body.ProviderHint,
             CorrelationId: body.CorrelationId ?? Guid.NewGuid().ToString("N"));
 
-        var result = await skill.ExecuteAsync(request, ct);
+        CalendarCreateResult result;
+        try
+        {
+            result = await skill.ExecuteAsync(request, ct);
+        }
+        catch (Exception ex)
+        {
+            // Don't leak infrastructure errors (e.g. database unavailable) as an
+            // unstructured 500 — return a contract-shaped error envelope.
+            loggerFactory.CreateLogger("Aluki.Runtime.Host.Calendar").LogError(
+                ex, "calendar.create.failed correlation_id={CorrelationId}", request.CorrelationId);
+            return Results.Json(
+                new { error = "internal_error", message = "Calendar event creation failed." },
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
 
         return result.OutcomeType switch
         {
@@ -187,23 +204,23 @@ public static class CalendarEndpoints
 }
 
 public sealed record CalendarCreateEventHttpRequest(
-    Guid TenantId,
-    Guid ContextId,
-    Guid UserId,
-    string NaturalLanguageInput,
-    string? ProviderHint,
-    string? CorrelationId);
+    [property: JsonPropertyName("tenant_id")] Guid TenantId,
+    [property: JsonPropertyName("context_id")] Guid ContextId,
+    [property: JsonPropertyName("user_id")] Guid UserId,
+    [property: JsonPropertyName("natural_language_input")] string NaturalLanguageInput,
+    [property: JsonPropertyName("provider_hint")] string? ProviderHint,
+    [property: JsonPropertyName("correlation_id")] string? CorrelationId);
 
 public sealed record CalendarConnectHttpRequest(
-    Guid TenantId,
-    Guid ContextId,
-    Guid UserId,
-    string Provider,
-    string? CorrelationId);
+    [property: JsonPropertyName("tenant_id")] Guid TenantId,
+    [property: JsonPropertyName("context_id")] Guid ContextId,
+    [property: JsonPropertyName("user_id")] Guid UserId,
+    [property: JsonPropertyName("provider")] string Provider,
+    [property: JsonPropertyName("correlation_id")] string? CorrelationId);
 
 public sealed record CalendarDisconnectHttpRequest(
-    Guid TenantId,
-    Guid ContextId,
-    Guid UserId,
-    string Provider,
-    string? CorrelationId);
+    [property: JsonPropertyName("tenant_id")] Guid TenantId,
+    [property: JsonPropertyName("context_id")] Guid ContextId,
+    [property: JsonPropertyName("user_id")] Guid UserId,
+    [property: JsonPropertyName("provider")] string Provider,
+    [property: JsonPropertyName("correlation_id")] string? CorrelationId);

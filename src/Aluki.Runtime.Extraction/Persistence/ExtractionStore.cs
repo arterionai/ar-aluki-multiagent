@@ -197,11 +197,26 @@ public sealed class ExtractionStore
     }
 
     /// <summary>Records a terminal failure with a controlled error category (FR-009/SC-002).</summary>
+    public Task FailJobAsync(
+        PrincipalScope principal,
+        Guid jobId,
+        string errorCategory,
+        string errorMessage,
+        CancellationToken cancellationToken) =>
+        FailJobAsync(principal, jobId, errorCategory, errorMessage, manualReview: false, cancellationToken);
+
+    /// <summary>
+    /// Records a terminal failure. When <paramref name="manualReview"/> is set
+    /// (e.g. an unreadable receipt after the OCR fallback chain), an additional
+    /// <c>manual_review_flagged</c> audit event is written so the job surfaces for
+    /// human verification (FR-009).
+    /// </summary>
     public async Task FailJobAsync(
         PrincipalScope principal,
         Guid jobId,
         string errorCategory,
         string errorMessage,
+        bool manualReview,
         CancellationToken cancellationToken)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
@@ -222,6 +237,12 @@ public sealed class ExtractionStore
             command.Parameters.AddWithValue("category", errorCategory);
             command.Parameters.AddWithValue("message", errorMessage);
             await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (manualReview)
+        {
+            await WriteAuditAsync(connection, transaction, jobId, principal,
+                ExtractionAuditEventType.ManualReviewFlagged, errorCategory, cancellationToken);
         }
 
         await WriteAuditAsync(connection, transaction, jobId, principal,

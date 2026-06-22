@@ -114,17 +114,20 @@
 
 ### Tests for User Story 3
 
-- [ ] T029 [P] [US3] Add extraction contract tests for receipt_ocr responses and warning codes in tests/contract/ExtractionReceiptContractTests.cs
-- [ ] T030 [P] [US3] Add integration tests for OCR fallback chain and unreadable/manual-review behavior in tests/integration/ExtractionReceiptOcrIntegrationTests.cs
-- [ ] T031 [P] [US3] Add unit tests for RFC extraction validation and monetary/date normalization in tests/unit/ReceiptExtractionNormalizationTests.cs
+> Implementation landed in `src/Aluki.Runtime.Extraction` (mirroring US1/US2),
+> not `Host`; test files added under the shared test projects.
+
+- [x] T029 [P] [US3] Receipt OCR contract tests (receipt_ocr response shape, fallback warning, image validation) in tests/contract/Aluki.Runtime.ContractTests/ExtractionContractTests.cs
+- [x] T030 [P] [US3] Integration tests for the OCR fallback chain and unreadable/manual-review behavior in tests/integration/Aluki.Runtime.IntegrationTests/ExtractionPipelineIntegrationTests.cs
+- [x] T031 [P] [US3] Unit tests for RFC validation and monetary/date normalization in tests/unit/Aluki.Runtime.UnitTests/ReceiptExtractionNormalizationTests.cs
 
 ### Implementation for User Story 3
 
-- [ ] T032 [US3] Implement structured receipt OCR provider adapter with field-level confidence capture in src/Aluki.Runtime.Host/Extraction/Providers/ReceiptOcrProvider.cs
-- [ ] T033 [US3] Implement text-only OCR fallback and unreadable classification policy in src/Aluki.Runtime.Host/Extraction/Skills/ReceiptOcrFallbackSkill.cs
-- [ ] T034 [US3] Implement receipt extraction orchestration including RFC/amount/date/tax normalization in src/Aluki.Runtime.Host/Extraction/Skills/ReceiptExtractionSkill.cs
-- [ ] T035 [US3] Extend extraction endpoints for image receipt source and warning payloads in src/Aluki.Runtime.Functions/Functions/ExtractionFunctions.cs
-- [ ] T036 [US3] Persist receipt-specific extraction artifacts and manual-review flags in src/Aluki.Runtime.Host/Extraction/Persistence/PostgresExtractionRepository.cs
+- [x] T032 [US3] Structured receipt OCR provider (Azure vision) with field-level confidence in src/Aluki.Runtime.Extraction/Providers/FoundryReceiptOcrProvider.cs
+- [x] T033 [US3] Text-only OCR fallback + unreadable classification in src/Aluki.Runtime.Extraction/Policies/ReceiptExtractionPolicy.cs (chain orchestrated in ExtractionCoordinator.ProcessReceiptAsync)
+- [x] T034 [US3] Receipt RFC/amount/date/tax normalization in src/Aluki.Runtime.Extraction/Policies/ReceiptNormalization.cs
+- [x] T035 [US3] Image receipt routing + warning payloads via ExtractionCoordinator (Functions endpoint already modality-agnostic) in src/Aluki.Runtime.Extraction/ExtractionCoordinator.cs
+- [x] T036 [US3] Persist receipt fields + manual-review audit (ExtractionStore.FailJobAsync manualReview) in src/Aluki.Runtime.Extraction/Persistence/ExtractionStore.cs
 
 **Checkpoint**: US3 independently functional and testable.
 

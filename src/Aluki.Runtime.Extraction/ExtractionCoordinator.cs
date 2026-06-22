@@ -16,11 +16,12 @@ public sealed record ExtractionHttpResult(int StatusCode, object Body);
 
 /// <summary>
 /// Orchestrates an extraction request: validate, scope-guard, idempotent job
-/// creation, route by modality (audio US1 / text US2), confidence-tier the
-/// fields, and persist result + provenance + audit. Receipt OCR (image, US3) is
-/// not yet implemented and returns a controlled <c>not_implemented</c> error.
-/// Long-running durable orchestration is a documented follow-up; processing is
-/// performed inline and the status endpoint reflects the persisted lifecycle.
+/// creation, route by modality (audio US1 / text US2 / receipt OCR US3),
+/// confidence-tier the fields, and persist result + provenance + audit. Receipt
+/// OCR runs the clarified fallback chain (structured OCR → text-only OCR →
+/// unreadable/manual-review) with no fabrication. Long-running durable
+/// orchestration is a documented follow-up; processing is performed inline and
+/// the status endpoint reflects the persisted lifecycle.
 /// </summary>
 public sealed class ExtractionCoordinator
 {
@@ -28,6 +29,7 @@ public sealed class ExtractionCoordinator
     private readonly ExtractionStore _store;
     private readonly ITranscriptionProvider _transcription;
     private readonly IStructuredTextExtractionProvider _textExtraction;
+    private readonly IReceiptOcrProvider _receiptOcr;
     private readonly ExtractionOptions _options;
     private readonly ILogger<ExtractionCoordinator> _logger;
 
@@ -36,6 +38,7 @@ public sealed class ExtractionCoordinator
         ExtractionStore store,
         ITranscriptionProvider transcription,
         IStructuredTextExtractionProvider textExtraction,
+        IReceiptOcrProvider receiptOcr,
         IOptions<ExtractionOptions> options,
         ILogger<ExtractionCoordinator> logger)
     {
@@ -43,6 +46,7 @@ public sealed class ExtractionCoordinator
         _store = store;
         _transcription = transcription;
         _textExtraction = textExtraction;
+        _receiptOcr = receiptOcr;
         _options = options.Value;
         _logger = logger;
     }
@@ -100,7 +104,7 @@ public sealed class ExtractionCoordinator
             {
                 ExtractionInputType.Audio => await ProcessAudioAsync(principal, creation.JobId, input, request.ProcessingOptions, correlationId, cancellationToken),
                 ExtractionInputType.Text => await ProcessTextAsync(principal, creation.JobId, input, request.ProcessingOptions, correlationId, cancellationToken),
-                ExtractionInputType.Image => await NotImplementedAsync(principal, creation.JobId, correlationId, cancellationToken),
+                ExtractionInputType.Image => await ProcessReceiptAsync(principal, creation.JobId, input, request.ProcessingOptions, correlationId, cancellationToken),
                 _ => await FailAsync(principal, creation.JobId, correlationId, ExtractionErrorCode.UnsupportedFormat, "Unsupported input_type.", cancellationToken)
             };
         }
@@ -242,6 +246,95 @@ public sealed class ExtractionCoordinator
             options, cancellationToken);
     }
 
+    /// <summary>
+    /// Receipt OCR (US3) with the clarified fallback chain: primary structured
+    /// OCR → secondary text-only OCR (recovered fields flagged for review) →
+    /// unreadable/manual-review when both attempts yield nothing. No fabrication:
+    /// fields that fail validation are persisted for review but withheld.
+    /// </summary>
+    private async Task<ExtractionHttpResult> ProcessReceiptAsync(
+        PrincipalScope principal,
+        Guid jobId,
+        ExtractionInput input,
+        ExtractionProcessingOptions? options,
+        string correlationId,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        byte[] image;
+        try
+        {
+            image = Convert.FromBase64String(input.ImageData!);
+        }
+        catch (FormatException)
+        {
+            return await FailAsync(principal, jobId, correlationId, ExtractionErrorCode.UnsupportedFormat, "image_data is not valid base64.", cancellationToken);
+        }
+
+        var mediaType = ReceiptMediaType(input);
+        var language = ExtractionLanguageResolver.Resolve(Array.Empty<LanguageSegment>(), options?.LanguageHint);
+
+        // Primary attempt: structured fiscal-field OCR.
+        var structured = await _receiptOcr.ExtractStructuredAsync(image, mediaType, options?.LanguageHint, cancellationToken);
+        var rawText = structured.RawText;
+        var fallbackUsed = false;
+        IReadOnlyList<ExtractedFact> facts = structured.Readable
+            ? ReceiptExtractionPolicy.MapStructured(structured.Fields, language.DetectedLanguage)
+            : Array.Empty<ExtractedFact>();
+
+        // Secondary attempt: text-only OCR fallback when structured produced nothing.
+        if (facts.Count == 0)
+        {
+            fallbackUsed = true;
+            if (string.IsNullOrWhiteSpace(rawText))
+            {
+                rawText = await _receiptOcr.ExtractRawTextAsync(image, mediaType, cancellationToken);
+            }
+
+            facts = ReceiptExtractionPolicy.ParseRawText(rawText, language.DetectedLanguage);
+        }
+
+        // Both attempts failed: unreadable receipt, flagged for manual review.
+        if (facts.Count == 0)
+        {
+            await _store.FailJobAsync(principal, jobId, ExtractionErrorCode.OcrFailedAll,
+                "Receipt could not be read; flagged for manual review.", manualReview: true, cancellationToken);
+            return Ok(new ExtractionResponse(
+                Status: ExtractionResponseStatus.Failed,
+                JobId: jobId,
+                JobStatus: ExtractionJobStatus.Failed,
+                CorrelationId: correlationId,
+                Error: new ErrorInfo(ExtractionErrorCode.OcrFailedAll, "Receipt could not be read; flagged for manual review."),
+                Warnings: [new WarningItem(ExtractionWarningCode.UnreadableFragment, "Receipt image was unreadable; manual review required.", Array.Empty<string>())],
+                StatusUrl: StatusUrl(jobId)));
+        }
+
+        var mappedFields = facts.Select(f => MapFact(f, language.DetectedLanguage)).ToList();
+        var rawContent = new
+        {
+            source = "receipt_image",
+            media_type = mediaType,
+            fallback_used = fallbackUsed,
+            detected_language = language.DetectedLanguage,
+            raw_text = rawText
+        };
+
+        IReadOnlyList<WarningItem>? extraWarnings = fallbackUsed
+            ? new[]
+            {
+                new WarningItem(
+                    ExtractionWarningCode.OcrFallbackUsed,
+                    "Structured OCR failed; fields were recovered via text-only fallback and flagged for review.",
+                    mappedFields.Select(f => f.FieldName).Distinct().ToArray())
+            }
+            : null;
+
+        return await FinalizeAsync(
+            principal, jobId, correlationId, ExtractionType.ReceiptOcr, structured.ModelInfo,
+            rawContent, mappedFields, language, segmentCount: 1, (int)stopwatch.ElapsedMilliseconds,
+            options, cancellationToken, extraWarnings);
+    }
+
     private async Task<ExtractionHttpResult> FinalizeAsync(
         PrincipalScope principal,
         Guid jobId,
@@ -254,7 +347,8 @@ public sealed class ExtractionCoordinator
         int segmentCount,
         int processingTimeMs,
         ExtractionProcessingOptions? options,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<WarningItem>? extraWarnings = null)
     {
         var threshold = options?.ConfidenceThreshold ?? _options.DefaultConfidenceThreshold;
         var classification = ExtractionConfidencePolicy.Classify(allFields, threshold);
@@ -275,29 +369,20 @@ public sealed class ExtractionCoordinator
             RawContent: (options?.IncludeRaw ?? false) ? rawContent : null,
             ModelInfo: modelInfo);
 
+        // Merge confidence warnings with any modality-specific warnings (e.g. OCR fallback).
+        var warnings = extraWarnings is { Count: > 0 }
+            ? extraWarnings.Concat(classification.Warnings).ToList()
+            : (IReadOnlyList<WarningItem>)classification.Warnings;
+
         return Ok(new ExtractionResponse(
             Status: classification.ResponseStatus,
             JobId: jobId,
             JobStatus: classification.JobStatus,
             CorrelationId: correlationId,
             ExtractionResults: results,
-            Warnings: classification.Warnings.Count > 0 ? classification.Warnings : null,
+            Warnings: warnings.Count > 0 ? warnings : null,
             StatusUrl: StatusUrl(jobId),
             ProcessingMetadata: new ProcessingMetadata(processingTimeMs, segmentCount, 100.0)));
-    }
-
-    private async Task<ExtractionHttpResult> NotImplementedAsync(
-        PrincipalScope principal, Guid jobId, string correlationId, CancellationToken cancellationToken)
-    {
-        await _store.FailJobAsync(principal, jobId, ExtractionErrorCode.UnsupportedFormat,
-            "Receipt OCR (image) extraction is not yet implemented (SB-004 US3).", cancellationToken);
-        return new ExtractionHttpResult(501, new ExtractionResponse(
-            Status: ExtractionResponseStatus.Failed,
-            JobId: jobId,
-            JobStatus: ExtractionJobStatus.Failed,
-            CorrelationId: correlationId,
-            Error: new ErrorInfo(ExtractionErrorCode.NotImplemented, "Receipt OCR (image) extraction is not yet implemented."),
-            StatusUrl: StatusUrl(jobId)));
     }
 
     private async Task<ExtractionHttpResult> FailAsync(
@@ -417,6 +502,20 @@ public sealed class ExtractionCoordinator
         ExtractionJobStatus.Failed => ExtractionResponseStatus.Failed,
         _ => ExtractionResponseStatus.Pending
     };
+
+    /// <summary>Resolves the image media type from the request encoding/type hint.</summary>
+    private static string ReceiptMediaType(ExtractionInput input)
+    {
+        var hint = (input.Encoding ?? input.ImageType ?? "jpeg").Trim().ToLowerInvariant();
+        return hint switch
+        {
+            "jpg" or "jpeg" or "image/jpeg" => "image/jpeg",
+            "png" or "image/png" => "image/png",
+            "webp" or "image/webp" => "image/webp",
+            "gif" or "image/gif" => "image/gif",
+            _ => "image/jpeg"
+        };
+    }
 
     private static string StatusUrl(Guid jobId) => $"/api/extraction/jobs/{jobId}";
 

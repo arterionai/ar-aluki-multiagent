@@ -32,6 +32,7 @@ public sealed class ExtractionContractTests
             new ExtractionStore(factory),
             new ThrowingTranscriptionProvider(),
             new ThrowingTextExtractionProvider(),
+            new ThrowingReceiptOcrProvider(),
             Options.Create(new ExtractionOptions()),
             NullLogger<ExtractionCoordinator>.Instance);
     }
@@ -111,6 +112,55 @@ public sealed class ExtractionContractTests
     }
 
     [Fact]
+    public async Task Image_input_without_image_data_returns_400()
+    {
+        var coordinator = BuildCoordinator();
+        var request = new ExtractionRequest(
+            null, null, null, ValidPrincipal(),
+            new ExtractionInput(ExtractionInputType.Image, "upload", null, "jpg", null, null, ImageData: null, ImageType: "receipt"),
+            null);
+
+        var result = await coordinator.ProcessAsync(request, CancellationToken.None);
+
+        Assert.Equal(400, result.StatusCode);
+        var error = Assert.IsType<ExtractionErrorResponse>(result.Body);
+        Assert.Equal(ExtractionErrorCode.InvalidPayload, error.Code);
+    }
+
+    [Fact]
+    public void Receipt_ocr_response_serializes_fields_and_fallback_warning_in_snake_case()
+    {
+        var response = new ExtractionResponse(
+            Status: ExtractionResponseStatus.PartialSuccess,
+            JobId: Guid.NewGuid(),
+            JobStatus: ExtractionJobStatus.CompletedWithWarnings,
+            CorrelationId: "c-receipt",
+            ExtractionResults: new ExtractionResults(
+                ExtractionType.ReceiptOcr, 0.78,
+                [
+                    new ExtractionFieldDto("vendor", ExtractionFieldType.Text, "OXXO", 0.91, ConfidenceTier.High),
+                    new ExtractionFieldDto("total", ExtractionFieldType.Amount, new { value = 123.45m, currency = "MXN" }, 0.80, ConfidenceTier.Medium),
+                    new ExtractionFieldDto("rfc", ExtractionFieldType.Text, "OXX970814HS9", 0.88, ConfidenceTier.High)
+                ],
+                RawContent: null,
+                ModelInfo: new ModelInfo("Azure.AI.Foundry", "model-router", "vision-v1")),
+            Warnings: [new WarningItem(ExtractionWarningCode.OcrFallbackUsed, "fallback", ["total"])],
+            StatusUrl: "/api/extraction/jobs/x",
+            ProcessingMetadata: new ProcessingMetadata(42, 1, 100.0));
+
+        var json = JsonSerializer.Serialize(response);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        Assert.True(root.TryGetProperty("extraction_results", out var results));
+        Assert.Equal("receipt_ocr", results.GetProperty("extraction_type").GetString());
+        Assert.True(results.TryGetProperty("extracted_fields", out var fields));
+        Assert.Equal("vendor", fields[0].GetProperty("field_name").GetString());
+        Assert.True(root.TryGetProperty("warnings", out var warnings));
+        Assert.Equal(ExtractionWarningCode.OcrFallbackUsed, warnings[0].GetProperty("code").GetString());
+    }
+
+    [Fact]
     public void Response_serializes_contract_fields_in_snake_case()
     {
         var response = new ExtractionResponse(
@@ -152,6 +202,15 @@ public sealed class ExtractionContractTests
     private sealed class ThrowingTextExtractionProvider : IStructuredTextExtractionProvider
     {
         public Task<StructuredExtractionOutput> ExtractAsync(string text, LanguageResolution language, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("should not be called on validation paths");
+    }
+
+    private sealed class ThrowingReceiptOcrProvider : IReceiptOcrProvider
+    {
+        public Task<ReceiptOcrResult> ExtractStructuredAsync(byte[] image, string mediaType, string? languageHint, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("should not be called on validation paths");
+
+        public Task<string?> ExtractRawTextAsync(byte[] image, string mediaType, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("should not be called on validation paths");
     }
 }

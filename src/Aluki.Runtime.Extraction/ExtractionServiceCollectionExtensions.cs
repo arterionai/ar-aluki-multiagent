@@ -23,6 +23,7 @@ public static class ExtractionServiceCollectionExtensions
         services.TryAddSingleton<IChatModelRouter, FoundryChatModelRouter>();
         services.AddSingleton<ITranscriptionProvider, AzureOpenAiTranscriptionProvider>();
         services.AddSingleton<IStructuredTextExtractionProvider, FoundryStructuredTextExtractionProvider>();
+        services.AddSingleton<IReceiptOcrProvider, FoundryReceiptOcrProvider>();
 
         services.AddSingleton<ExtractionScopeGuard>();
         services.AddSingleton<ExtractionStore>();

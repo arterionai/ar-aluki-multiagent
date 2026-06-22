@@ -57,3 +57,40 @@ public interface IStructuredTextExtractionProvider
         LanguageResolution language,
         CancellationToken cancellationToken);
 }
+
+/// <summary>A receipt field read from an image, prior to normalization/tiering.</summary>
+public sealed record ReceiptFieldCandidate(
+    string FieldName,
+    string FieldType,
+    object? Value,
+    double Confidence,
+    string? Currency = null);
+
+/// <summary>Outcome of a single receipt OCR attempt (US3).</summary>
+public sealed record ReceiptOcrResult(
+    bool Readable,
+    string? RawText,
+    IReadOnlyList<ReceiptFieldCandidate> Fields,
+    ModelInfo ModelInfo);
+
+/// <summary>
+/// Receipt OCR provider (US3). Reads vendor/amount/date/tax and RFC from a
+/// receipt image. Two attempts are exposed so the orchestrator can run the
+/// clarified fallback chain: primary structured OCR → secondary text-only OCR →
+/// unreadable/manual-review. Inference stays on Azure per the runtime directive.
+/// </summary>
+public interface IReceiptOcrProvider
+{
+    /// <summary>Primary attempt: structured fiscal-field OCR.</summary>
+    Task<ReceiptOcrResult> ExtractStructuredAsync(
+        byte[] image,
+        string mediaType,
+        string? languageHint,
+        CancellationToken cancellationToken);
+
+    /// <summary>Secondary attempt: plain text-only transcription of the image.</summary>
+    Task<string?> ExtractRawTextAsync(
+        byte[] image,
+        string mediaType,
+        CancellationToken cancellationToken);
+}
