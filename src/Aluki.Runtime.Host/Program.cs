@@ -1,6 +1,8 @@
 using Aluki.Runtime.Capture;
 using Aluki.Runtime.Host;
+using Aluki.Runtime.Host.Calendar;
 using Aluki.Runtime.Host.Channels.WhatsApp;
+using Aluki.Runtime.Host.Endpoints;
 using Azure.Identity;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -25,6 +27,9 @@ if (keyVaultEnabled && Uri.TryCreate(keyVaultUriText, UriKind.Absolute, out var 
 // WhatsApp capture pipeline (shared with the Functions deployment).
 builder.Services.AddWhatsAppCapture(builder.Configuration);
 
+// Calendar integration skills, repositories, and telemetry.
+builder.Services.AddCalendarIntegration(builder.Configuration);
+
 // Background heartbeat (existing runtime worker)
 builder.Services.AddHostedService<Worker>();
 
@@ -32,6 +37,7 @@ var app = builder.Build();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "aluki-runtime-host" }));
 app.MapWhatsAppInbound();
+app.MapCalendarEndpoints();
 
 app.Run();
 

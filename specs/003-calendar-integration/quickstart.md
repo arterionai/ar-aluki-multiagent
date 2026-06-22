@@ -116,3 +116,47 @@ Expected outcome:
 
 Expected outcome:
 - Token material remains confined to authorization boundaries and is never exposed.
+
+---
+
+## Execution Evidence (SB-003 Implementation)
+
+**Branch**: `claude/tender-archimedes-8xb1vw`
+**Implementation date**: 2026-06-22
+
+### Build
+
+```
+dotnet build Aluki.Runtime.slnx -v minimal
+# Result: Build succeeded (0 errors, warnings are NU1603/NU1903 package advisories only)
+```
+
+### Test suite
+
+All tests implemented without a live database dependency (in-memory stubs):
+
+| Category    | Test file                                         | Coverage                                              |
+|-------------|---------------------------------------------------|-------------------------------------------------------|
+| Unit        | CalendarRequestClassifierSkillTests               | T023 — classifier: title, time, timezone, provider hint, hash |
+| Unit        | CalendarScopeGuardTests                           | FR-002 — scope guard always-permit stub               |
+| Unit        | CalendarProviderParityPolicyTests                 | T034 — parity policy: contract violations + token leakage |
+| Integration | CalendarCallbackSecurityIntegrationTests          | T031 — callback: nonce replay, expiry, state mismatch |
+| Integration | CalendarTimezoneResolutionIntegrationTests        | T021 — DST ambiguity, IANA resolution, UTC conversion |
+| Integration | CalendarDeduplicationIntegrationTests             | T022 — 10-minute dedup window, stable outcome ref     |
+| Integration | CalendarGoogleParityIntegrationTests              | T032 — Google/Outlook adapter parity (enabled/disabled) |
+| Integration | CalendarProviderSelectionIntegrationTests         | T033 — explicit hint, default, tiebreak               |
+| Integration | CalendarLatencyIntegrationTests                   | T038 — classifier <50ms, resolver <20ms, selection <5ms |
+| Integration | CalendarSecurityAndAuditIntegrationTests          | T039 — token redaction, ProviderTokenBoundary, audit isolation |
+| Contract    | CalendarAuthorizationContractTests                | FR-001 — connect/disconnect HTTP contract             |
+| Contract    | CalendarCreateEventContractTests                  | T020 — create_event HTTP contract, 400/402/403 shapes |
+
+### Key implementation files
+
+- `db/migrations/008_calendar_integration.sql` — 9 tables with RLS policies
+- `src/Aluki.Runtime.Host/Calendar/CalendarServiceExtensions.cs` — single DI entry point
+- `src/Aluki.Runtime.Host/Calendar/Providers/OutlookCalendarProvider.cs` — Outlook adapter
+- `src/Aluki.Runtime.Host/Calendar/Providers/GoogleCalendarProvider.cs` — Google adapter
+- `src/Aluki.Runtime.Host/Calendar/Skills/CalendarCreateSkill.cs` — full create pipeline
+- `src/Aluki.Runtime.Host/Calendar/Security/TokenRedactionPolicy.cs` — token scrubbing
+- `src/Aluki.Runtime.Host/Calendar/Security/ProviderTokenBoundary.cs` — [REDACTED] boundary
+- `src/Aluki.Runtime.Host/Endpoints/CalendarEndpoints.cs` — 4 endpoints
