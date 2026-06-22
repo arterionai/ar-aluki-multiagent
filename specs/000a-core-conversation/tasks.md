@@ -107,7 +107,7 @@ user story work begins.
 
 - [x] T029 [P] Update `CLAUDE.md` delivery state to reflect SB-000 done and migration numbering shift (SB-010 billing → 027–033)
 - [ ] T030 [P] Update quickstart with smoke-test steps in `specs/000a-core-conversation/quickstart.md`
-- [ ] T031 Build and run all touched test suites; capture summary in `specs/000a-core-conversation/validation-report.md`
+- [x] T031 Build and run all touched test suites; capture summary in `specs/000a-core-conversation/validation-report.md`
 - [x] T032 Produce FR traceability table in `specs/000a-core-conversation/checklists/requirements.md`
 
 ---
