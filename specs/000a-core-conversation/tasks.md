@@ -17,21 +17,21 @@ user story work begins.
 
 ## Phase 1: Contracts and Interfaces
 
-- [ ] T001 Add `IConversationHistoryStore` in `src/Aluki.Runtime.Abstractions/Conversation/IConversationHistoryStore.cs`
-- [ ] T002 [P] Add `IOutboundMessageStore` in `src/Aluki.Runtime.Abstractions/Conversation/IOutboundMessageStore.cs`
-- [ ] T003 [P] Add `ConversationTurn` and `OutboundMessage` models in `src/Aluki.Runtime.Abstractions/Conversation/ConversationModels.cs`
-- [ ] T004 [P] Extend `IWhatsAppMessenger` with `SendTextMessageAsync(phoneNumberId, recipientWaId, text, CancellationToken)` in `src/Aluki.Runtime.Capture/Channels/WhatsApp/IWhatsAppMessenger.cs`
-- [ ] T005 [P] Add `NullWhatsAppMessenger.SendTextMessageAsync` no-op implementation in `src/Aluki.Runtime.Capture/Channels/WhatsApp/NullWhatsAppMessenger.cs`
+- [x] T001 Add `IConversationHistoryStore` in `src/Aluki.Runtime.Abstractions/Conversation/IConversationHistoryStore.cs`
+- [x] T002 [P] Add `IOutboundMessageStore` in `src/Aluki.Runtime.Abstractions/Conversation/IOutboundMessageStore.cs`
+- [x] T003 [P] Add `ConversationTurn` and `OutboundMessage` models in `src/Aluki.Runtime.Abstractions/Conversation/ConversationModels.cs`
+- [x] T004 [P] Extend `IWhatsAppMessenger` with `SendTextMessageAsync(phoneNumberId, recipientWaId, text, CancellationToken)` in `src/Aluki.Runtime.Capture/Channels/WhatsApp/IWhatsAppMessenger.cs`
+- [x] T005 [P] Add `NullWhatsAppMessenger.SendTextMessageAsync` no-op implementation in `src/Aluki.Runtime.Capture/Channels/WhatsApp/NullWhatsAppMessenger.cs`
 
 ---
 
 ## Phase 2: Migration and Persistence
 
-- [ ] T006 Create migration `db/migrations/020_conversational_response.sql` — `outbound_messages` table, RLS policy, and `ix_outbound_messages_tenant_user_created` index
-- [ ] T007 Implement `MetaWhatsAppMessenger.SendTextMessageAsync` using Meta Graph API `/{phone_number_id}/messages` POST in `src/Aluki.Runtime.Functions/Channels/MetaWhatsAppMessenger.cs`
-- [ ] T008 [P] Implement `OutboundMessageStore` with idempotent upsert (INSERT … ON CONFLICT DO NOTHING RETURNING) in `src/Aluki.Runtime.Conversation/OutboundMessageStore.cs`
-- [ ] T009 [P] Implement `ConversationHistoryStore` querying `captured_messages` UNION `outbound_messages` ordered by `created_at DESC LIMIT N` in `src/Aluki.Runtime.Conversation/ConversationHistoryStore.cs`
-- [ ] T010 [P] Add migration filename to the explicit list in `.github/workflows/azure-deploy-runtime.yml` and to `tests/integration/.../DbCaptureFixture.cs`
+- [x] T006 Create migration `db/migrations/020_conversational_response.sql` — `outbound_messages` table, RLS policy, and `ix_outbound_tenant_user_created` index
+- [x] T007 Implement `MetaWhatsAppMessenger.SendTextMessageAsync` using Meta Graph API `/{phone_number_id}/messages` POST in `src/Aluki.Runtime.Capture/Channels/WhatsApp/WhatsAppMessenger.cs`
+- [x] T008 [P] Implement `OutboundMessageStore` with idempotent upsert (INSERT … ON CONFLICT DO NOTHING RETURNING) in `src/Aluki.Runtime.Conversation/OutboundMessageStore.cs`
+- [x] T009 [P] Implement `ConversationHistoryStore` querying `unified_message_artifact` UNION `outbound_messages` ordered by `created_at_utc DESC LIMIT N` in `src/Aluki.Runtime.Conversation/ConversationHistoryStore.cs`
+- [x] T010 [P] Add migration filename to the explicit list in `.github/workflows/azure-deploy-runtime.yml` and to `tests/integration/.../DbCaptureFixture.cs`
 
 **Checkpoint**: Persistence layer ready. Agent work can begin.
 
@@ -49,10 +49,10 @@ user story work begins.
 
 ### Implementation
 
-- [ ] T016 [US1] Implement `ConversationalResponseAgent.HandleAsync` — history fetch, recall, prompt assembly, LLM call, outbound send, persist in `src/Aluki.Runtime.Conversation/ConversationalResponseAgent.cs`
-- [ ] T017 [US1] Implement system prompt builder with grounding rules and citation style in `src/Aluki.Runtime.Conversation/ConversationPromptBuilder.cs`
-- [ ] T018 [US1] Register `ConversationalResponseAgent` as `IDomainAgent` (priority = 100) in `src/Aluki.Runtime.Host/Program.cs` and `src/Aluki.Runtime.Functions/Program.cs`
-- [ ] T019 [US1] Add `Conversation` options binding and validation (HistoryWindowSize, LlmTimeoutSeconds, ErrorFallbackMessage) in `src/Aluki.Runtime.Host/appsettings.json` and `Program.cs`
+- [x] T016 [US1] Implement `ConversationalResponseAgent.HandleAsync` — history fetch, recall, prompt assembly, LLM call, outbound send, persist in `src/Aluki.Runtime.Conversation/ConversationalResponseAgent.cs`
+- [x] T017 [US1] Implement system prompt builder with grounding rules and citation style in `src/Aluki.Runtime.Conversation/ConversationPromptBuilder.cs`
+- [x] T018 [US1] Register `ConversationalResponseAgent` as `IDomainAgent` (priority = 100) in `src/Aluki.Runtime.Host/Program.cs` and `src/Aluki.Runtime.Functions/Program.cs`
+- [x] T019 [US1] Add `Conversation` options binding and validation (HistoryWindowSize, LlmTimeoutSeconds, ErrorFallbackMessage) in `src/Aluki.Runtime.Host/appsettings.json` and `Program.cs`
 
 **Checkpoint**: US1 functional. Users receive grounded text replies.
 
@@ -67,7 +67,7 @@ user story work begins.
 
 ### Implementation
 
-- [ ] T022 [US2] Handle empty recall result in `ConversationPromptBuilder` — inject no-results instruction into system prompt in `src/Aluki.Runtime.Conversation/ConversationPromptBuilder.cs`
+- [x] T022 [US2] Handle empty recall result in `ConversationalResponseAgent.HandleAsync` — append no-memory suffix when `MemoryStatus.NoResult` in `src/Aluki.Runtime.Conversation/ConversationalResponseAgent.cs`
 
 **Checkpoint**: US2 functional. Aluki never fabricates.
 
@@ -82,7 +82,7 @@ user story work begins.
 
 ### Implementation
 
-- [ ] T025 [US3] Add audio branch in `ConversationalResponseAgent.HandleAsync` — detect `UnifiedMessage.Type == Audio`, send acknowledgment, skip LLM call in `src/Aluki.Runtime.Conversation/ConversationalResponseAgent.cs`
+- [x] T025 [US3] Add audio branch in `ConversationalResponseAgent.HandleAsync` — detect `MediaRefs.Any(r => r.MediaKind == "audio")`, send acknowledgment, skip LLM call in `src/Aluki.Runtime.Conversation/ConversationalResponseAgent.cs`
 
 **Checkpoint**: US3 functional. Audio messages get immediate feedback.
 
@@ -97,7 +97,7 @@ user story work begins.
 
 ### Implementation
 
-- [ ] T028 [US4] Wrap LLM call in try/catch with timeout in `ConversationalResponseAgent.HandleAsync`; on failure send `ErrorFallbackMessage` and persist with `status = error_fallback` in `src/Aluki.Runtime.Conversation/ConversationalResponseAgent.cs`
+- [x] T028 [US4] Wrap LLM call in try/catch with timeout in `ConversationalResponseAgent.HandleAsync`; on failure send `ErrorFallbackMessage` and persist with `status = error_fallback` in `src/Aluki.Runtime.Conversation/ConversationalResponseAgent.cs`
 
 **Checkpoint**: US4 functional. No silent failures.
 
@@ -105,10 +105,10 @@ user story work begins.
 
 ## Phase 7: Polish
 
-- [ ] T029 [P] Update `CLAUDE.md` delivery state to reflect SB-000 done and migration numbering shift (SB-010 billing → 027–033)
+- [x] T029 [P] Update `CLAUDE.md` delivery state to reflect SB-000 done and migration numbering shift (SB-010 billing → 027–033)
 - [ ] T030 [P] Update quickstart with smoke-test steps in `specs/000a-core-conversation/quickstart.md`
 - [ ] T031 Build and run all touched test suites; capture summary in `specs/000a-core-conversation/validation-report.md`
-- [ ] T032 Produce FR traceability table in `specs/000a-core-conversation/checklists/requirements.md`
+- [x] T032 Produce FR traceability table in `specs/000a-core-conversation/checklists/requirements.md`
 
 ---
 

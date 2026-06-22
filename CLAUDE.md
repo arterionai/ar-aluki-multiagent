@@ -176,6 +176,22 @@ documented intended behaviors without explicit instruction.
   HTTP in Functions (`SemanticGraphFunctions`).
   HTTP: `POST api/semantic-graph/resolve`, `GET/POST api/semantic-graph/entities|entities/{id}|entities/merge`,
   `GET api/semantic-graph/traverse|path`, `POST api/semantic-graph/relationships/{id}/archive`.
+- **SB-000 Core Conversational Response** — done (not yet deployed). Project
+  `Aluki.Runtime.Conversation`. Migration `020_conversational_response.sql`
+  (`app.outbound_messages` table with idempotency constraint `(tenant_id,
+  correlation_message_id)`, RLS select+insert policies). `ConversationalResponseAgent`
+  (priority=100): claims all WhatsApp messages with sender+phoneNumberId; audio →
+  immediate acknowledgment (no LLM); text → parallel history+recall, LLM call via
+  `IChatModelRouter`, send reply, persist outbound record; US2 no-memory suffix
+  appended when `MemoryStatus.NoResult`; US4 graceful fallback on LLM/network
+  failure; memory ingestion is fire-and-forget `Task.Run` (so MemoryDomainAgent is
+  not needed for ingestion). `ConversationHistoryStore`: UNION of
+  `app.unified_message_artifact` (inbound) + `app.outbound_messages` (outbound),
+  sets RLS GUC, returns chronological turns. `ConversationOptions`: HistoryWindowSize,
+  LlmTimeoutSeconds, ErrorFallbackMessage, AudioAcknowledgmentMessage,
+  NoMemoryMessageSuffix. `IWhatsAppMessenger` extended with `SendTextMessageAsync`.
+  **Migration numbering note**: SB-010 billing shifts to migrations 027–033 (SB-000
+  filled slot 020).
 - Next per order: SB-010.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
