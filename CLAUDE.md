@@ -82,7 +82,21 @@ documented intended behaviors without explicit instruction.
   SHA256(`userId:recipient:dueUnixSeconds:contentLower`). HTTP (Functions):
   `POST/GET api/delegated-reminders`, `DELETE api/delegated-reminders/{id}`.
   Config `DelegatedReminders:*`.
-- Next per order: SB-009A, SB-008B, SB-007/008A, SB-009B, 010-012.
+- **SB-009A Link Capture** — done (not yet deployed). Migration `013_link_capture.sql`
+  (link_artifacts/link_provenance_refs/link_pending_confirmations/link_enrichment_attempts/
+  link_enrichment_policy_decisions/link_audit_events + tenant RLS). URL detection +
+  canonical normalization + SHA256 hash dedup (`LinkCanonicalization`). Capture
+  outcomes: `created`, `upsert_merged` (same canonical URL + new source), `idempotent_noop`
+  (exact replay). One-time yes/no confirmation: atomic `TryConsumeConfirmationAsync`
+  (WHERE state='pending'), expiry sweep (`ExpireConfirmationsFunction`, every 5m).
+  Enrichment: policy-first (block private/loopback IPs), 4s timeout, fallback description,
+  fire-and-forget background scope. Recall: ILIKE substring search across url/label/description.
+  Implementation split: contracts/interfaces/canonicalization in `Aluki.Runtime.Abstractions/
+  Skills/LinkCapture`; repository/services/policy in `Aluki.Runtime.Host/Skills/LinkCapture/`;
+  HTTP endpoints in Functions (`LinkCaptureFunctions`). HTTP: `POST api/skills/link-capture/
+  capture|confirm|recall`. Config: no dedicated section (uses `Postgres:*` + `HttpClient`
+  "link-enrichment").
+- Next per order: SB-008B, SB-007/008A, SB-009B, 010-012.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 
