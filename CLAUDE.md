@@ -25,7 +25,7 @@ documented intended behaviors without explicit instruction.
   not separately tracked in this section before). Google + Outlook providers,
   connect/disconnect/create skills, callback security, `008_calendar_integration.sql`.
 - **SB-004 AI Extraction** — US1/US2/US3 done (not yet deployed). Project
-  `Aluki.Runtime.Extraction` (mirrors `Memory`). Migration `008_ai_extraction.sql`
+  `Aluki.Runtime.Extraction` (mirrors `Memory`). Migration `009_ai_extraction.sql`
   (jobs/results/fields/audit + tenant RLS). US1 (audio→transcription+structured
   facts), US2 (text→summary/actions/decisions/entities), and **US3 receipt OCR
   (image)** all done. Durable/async orchestration is a follow-up: processing runs
@@ -78,8 +78,13 @@ Directive: ALL AI inference goes through Azure OpenAI or Azure AI Foundry.
 
 - GitHub Actions `.github/workflows/azure-deploy-runtime.yml` deploys on **push to
   `main` only** (feature branches do NOT auto-deploy). Jobs: build+test →
-  `migrate-database` (opens PG firewall, applies `db/migrations/001..NNN` via a
+  `migrate-database` (opens PG firewall, applies migrations via a
   `schema_migrations` ledger, closes firewall) → `deploy-function` (OIDC).
+- **IMPORTANT**: the migrate-database step iterates an **explicit, hardcoded list**
+  of migration filenames (the `for f in 001_… 009_…` loop), NOT a glob. Every new
+  `db/migrations/NNN_*.sql` MUST be appended to that loop AND to the test fixture
+  list in `tests/integration/.../DbCaptureFixture.cs`, or it silently never runs.
+  (This is why SB-003/SB-004's `008/009` migrations were not applied until added.)
 - DB migrations run as part of deploy. pgcrypto is NOT allow-listed on Azure —
   use core `gen_random_uuid()` (PG16), do not `create extension pgcrypto`.
 - App settings use Key Vault references; Postgres connection string app setting is

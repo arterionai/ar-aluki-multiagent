@@ -1,6 +1,7 @@
--- 008_ai_extraction.sql
+-- 009_ai_extraction.sql
 -- SB-004 AI extraction: tenant-scoped extraction jobs/results/fields/audit with
--- confidence + provenance. Builds on tenancy/RLS from 001/003.
+-- confidence + provenance. Builds on tenancy/RLS from 001/003. Independent of
+-- 008_calendar_integration (both build only on 001/003).
 -- pgcrypto is NOT allow-listed on Azure; use core gen_random_uuid() (PG16).
 
 create table if not exists extraction_job (
