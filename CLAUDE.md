@@ -65,6 +65,15 @@ documented intended behaviors without explicit instruction.
     a ready `connect_url`. Multi-tenant note: register ONE OAuth app per provider; Microsoft
     must be multi-tenant (`TenantId=common`) and Google's consent screen must be Published +
     verified (sensitive `calendar.events` scope) for arbitrary users.
+  - **WhatsApp scheduling glue**: `CalendarDomainAgent` (`Aluki.Runtime.Calendar.Dispatch`,
+    `IDomainAgent` priority 50 — ahead of the catch-all `ConversationalResponseAgent` at 100,
+    selected by `MessageDispatcher`). `ClaimsIntent` uses a deterministic, accent-insensitive
+    `CalendarSchedulingDetector` (es/en "agéndame…/schedule a meeting…"); `HandleAsync` resolves
+    the scoped `CalendarCreateSkill` via `IServiceScopeFactory` (the agent is a singleton like the
+    others) and replies over WhatsApp (`IWhatsAppMessenger.SendTextMessageAsync`): confirmation on
+    success, the secure `connect_url` (consent page) on `reconnect_required`, or a clarification.
+    `CalendarSchedulingReply`/detector are pure + unit-tested. Registered in `AddCalendarIntegration`
+    (so both Host and the deployed Functions worker get it).
 - **SB-004 AI Extraction** — US1/US2/US3 done (not yet deployed). Project
   `Aluki.Runtime.Extraction` (mirrors `Memory`). Migration `009_ai_extraction.sql`
   (jobs/results/fields/audit + tenant RLS). US1 (audio→transcription+structured

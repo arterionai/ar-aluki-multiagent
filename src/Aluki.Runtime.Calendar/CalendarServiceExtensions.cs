@@ -1,3 +1,4 @@
+using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Abstractions.Skills.Calendar;
 using Aluki.Runtime.Capture.Persistence;
@@ -70,6 +71,12 @@ public static class CalendarServiceExtensions
         services.AddScoped<CalendarProviderSelectionSkill>();
         services.AddScoped<CalendarIdempotencyGuardSkill>();
         services.AddScoped<CalendarCreateSkill>();
+
+        // WhatsApp scheduling glue: claims "agéndame…" messages and replies with a
+        // confirmation or a secure connect link. Singleton (mirrors other domain agents);
+        // resolves the scoped CalendarCreateSkill per message via IServiceScopeFactory.
+        services.AddSingleton<Dispatch.CalendarDomainAgent>();
+        services.AddSingleton<IDomainAgent>(sp => sp.GetRequiredService<Dispatch.CalendarDomainAgent>());
 
         return services;
     }
