@@ -2,6 +2,7 @@ using Aluki.Runtime.Capture;
 using Aluki.Runtime.Host;
 using Aluki.Runtime.Host.Calendar;
 using Aluki.Runtime.Host.Skills.LinkCapture;
+using Aluki.Runtime.Host.Skills.YouTubeLinks;
 using Aluki.Runtime.Host.Channels.WhatsApp;
 using Aluki.Runtime.Host.Endpoints;
 using Azure.Identity;
@@ -33,6 +34,9 @@ builder.Services.AddCalendarIntegration(builder.Configuration);
 
 // Link capture, enrichment, confirmation, and recall.
 builder.Services.AddLinkCapture(builder.Configuration);
+
+// YouTube link save and classification (SB-008B).
+builder.Services.AddYouTubeLinkCapture(builder.Configuration);
 
 // Background heartbeat (existing runtime worker)
 builder.Services.AddHostedService<Worker>();

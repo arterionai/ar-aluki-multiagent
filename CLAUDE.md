@@ -96,7 +96,18 @@ documented intended behaviors without explicit instruction.
   HTTP endpoints in Functions (`LinkCaptureFunctions`). HTTP: `POST api/skills/link-capture/
   capture|confirm|recall`. Config: no dedicated section (uses `Postgres:*` + `HttpClient`
   "link-enrichment").
-- Next per order: SB-008B, SB-007/008A, SB-009B, 010-012.
+- **SB-008B YouTube Link Save and Classification** — done (not yet deployed). Migration
+  `014_youtube_link_capture.sql` (saved_link_artifacts/link_enrichments/link_classifications/
+  link_capture_audit_events + tenant RLS). YouTube URL detection + canonical video ID extraction
+  (watch/shorts/embed/youtu.be/m.youtube.com), SHA256-style dedup by `canonical_video_id`.
+  Provider fallback chain: primary→secondary→degraded; enrichment states: `enriched`, `partial`,
+  `degraded`. AI classification: `IYouTubeClassificationProvider` with confidence labels
+  (`high`/`medium`/`low`) and uncertainty flags per field. Stubs: `LoggingYouTubeMetadataProvider`
+  (both primary+secondary), `StubYouTubeClassificationProvider`. Implementation split: contracts/
+  interfaces/canonicalizer in `Aluki.Runtime.Abstractions/Skills/YouTubeLinks`; repository/services/
+  stubs in `Aluki.Runtime.Host/Skills/YouTubeLinks/`; HTTP in Functions (`CaptureYoutubeLinksFunction`).
+  HTTP: `POST api/v1/skills/youtube-links/capture`. Config: uses `Postgres:*`.
+- Next per order: SB-007/008A, SB-009B, 010-012.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 

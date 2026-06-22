@@ -212,7 +212,7 @@ public sealed class DelegatedReminderContractTests
         var total = 0;
         for (var i = 1; i <= 5; i++)
         {
-            total += Policies.DelegatedReminderRetryPolicy.BackoffSeconds(i);
+            total += DelegatedReminderRetryPolicy.BackoffSeconds(i);
         }
 
         Assert.Equal(31, total);

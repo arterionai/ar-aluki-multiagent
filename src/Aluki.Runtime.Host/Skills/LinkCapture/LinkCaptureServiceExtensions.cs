@@ -4,6 +4,7 @@ using Aluki.Runtime.Capture.Persistence;
 using Aluki.Runtime.Host.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aluki.Runtime.Host.Skills.LinkCapture;
 
