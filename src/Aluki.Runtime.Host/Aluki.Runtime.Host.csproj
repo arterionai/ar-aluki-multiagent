@@ -20,5 +20,6 @@
     <ProjectReference Include="..\Aluki.Runtime.Abstractions\Aluki.Runtime.Abstractions.csproj" />
     <ProjectReference Include="..\Aluki.Runtime.Capture\Aluki.Runtime.Capture.csproj" />
     <ProjectReference Include="..\Aluki.Runtime.Memory\Aluki.Runtime.Memory.csproj" />
+    <ProjectReference Include="..\Aluki.Runtime.Conversation\Aluki.Runtime.Conversation.csproj" />
   </ItemGroup>
 </Project>

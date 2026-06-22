@@ -1,4 +1,5 @@
 using Aluki.Runtime.Capture;
+using Aluki.Runtime.Conversation;
 using Aluki.Runtime.Host;
 using Aluki.Runtime.Host.Calendar;
 using Aluki.Runtime.Host.Skills.Billing;
@@ -55,6 +56,9 @@ builder.Services.AddSemanticGraph(builder.Configuration);
 
 // Billing & Package Management (SB-010): entitlement, ledger, invoices, credits.
 builder.Services.AddBilling(builder.Configuration);
+
+// Core Conversational Response (SB-000): respond to every WhatsApp message.
+builder.Services.AddConversationalResponse(builder.Configuration);
 
 // Background heartbeat (existing runtime worker)
 builder.Services.AddHostedService<Worker>();

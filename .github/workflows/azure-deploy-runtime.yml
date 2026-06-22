@@ -148,7 +148,7 @@ jobs:
           psql -v ON_ERROR_STOP=1 -c \
             "create table if not exists schema_migrations (filename text primary key, applied_at timestamptz not null default now());"
 
-          for f in 001_init_tenancy 002_init_artifacts 003_enable_rls 004_whatsapp_capture_foundation 005_whatsapp_capture_rls 006_document_support 007_personal_memory 008_calendar_integration 009_ai_extraction 010_reminders 011_reminder_retries 012_delegated_reminders 013_link_capture 014_youtube_link_capture 015_feedback_suggestions 016_suggestions_admin 017_dispatch_audit 018_governance_security 019_semantic_graph 020_billing; do
+          for f in 001_init_tenancy 002_init_artifacts 003_enable_rls 004_whatsapp_capture_foundation 005_whatsapp_capture_rls 006_document_support 007_personal_memory 008_calendar_integration 009_ai_extraction 010_reminders 011_reminder_retries 012_delegated_reminders 013_link_capture 014_youtube_link_capture 015_feedback_suggestions 016_suggestions_admin 017_dispatch_audit 018_governance_security 019_semantic_graph 020_conversational_response 021_billing; do
             applied="$(psql -tA -c "select 1 from schema_migrations where filename = '$f';")"
             if [ "$applied" = "1" ]; then
               echo "skip $f (already applied)"

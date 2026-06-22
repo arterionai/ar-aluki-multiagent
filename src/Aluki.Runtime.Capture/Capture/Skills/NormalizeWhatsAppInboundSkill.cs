@@ -82,7 +82,9 @@ public sealed class NormalizeWhatsAppInboundSkill : CaptureSkill
             Text: normalized.MessageText,
             MediaRefs: mediaRefs,
             ReceivedAtUtc: envelope.OccurredAtUtc,
-            CorrelationId: correlationId);
+            CorrelationId: correlationId,
+            SenderExternalId: envelope.Sender.ExternalUserId,
+            PhoneNumberId: envelope.PhoneNumberId);
     }
 
     private static string NormalizeMediaType(string? declared, string payloadType)

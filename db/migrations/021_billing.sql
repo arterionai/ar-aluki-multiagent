@@ -1,4 +1,4 @@
--- 020_billing.sql
+-- 021_billing.sql
 -- SB-010 Billing & Package Management: catalog, accounts, subscriptions,
 -- immutable ledger, credits, invoices, and audit trail.
 -- Global catalog tables (no tenant_id) carry no RLS.

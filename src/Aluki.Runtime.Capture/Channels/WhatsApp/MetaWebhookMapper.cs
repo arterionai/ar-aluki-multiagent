@@ -51,10 +51,13 @@ public static class MetaWebhookMapper
                 }
 
                 var contacts = value.TryGetProperty("contacts", out var c) ? c : default;
+                var phoneNumberId = value.TryGetProperty("metadata", out var meta)
+                    ? GetString(meta, "phone_number_id")
+                    : null;
 
                 foreach (var message in messages.EnumerateArray())
                 {
-                    var envelope = MapMessage(message, contacts);
+                    var envelope = MapMessage(message, contacts, phoneNumberId);
                     if (envelope is not null)
                     {
                         envelopes.Add(envelope);
@@ -125,7 +128,7 @@ public static class MetaWebhookMapper
         return targets;
     }
 
-    private static WhatsAppInboundEnvelope? MapMessage(JsonElement message, JsonElement contacts)
+    private static WhatsAppInboundEnvelope? MapMessage(JsonElement message, JsonElement contacts, string? phoneNumberId)
     {
         var providerMessageId = GetString(message, "id");
         var from = GetString(message, "from");
@@ -191,7 +194,8 @@ public static class MetaWebhookMapper
             ContextMetadata: null,
             Payload: payload,
             OccurredAtUtc: ResolveTimestamp(message),
-            CorrelationId: null);
+            CorrelationId: null,
+            PhoneNumberId: phoneNumberId);
     }
 
     private static MediaMetadata MapMedia(JsonElement message, string property, string mediaType)

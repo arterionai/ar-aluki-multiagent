@@ -176,7 +176,21 @@ documented intended behaviors without explicit instruction.
   HTTP in Functions (`SemanticGraphFunctions`).
   HTTP: `POST api/semantic-graph/resolve`, `GET/POST api/semantic-graph/entities|entities/{id}|entities/merge`,
   `GET api/semantic-graph/traverse|path`, `POST api/semantic-graph/relationships/{id}/archive`.
-- **SB-010 Billing & Package Management** — done (not yet deployed). Migration `020_billing.sql`
+- **SB-000 Core Conversational Response** — done (not yet deployed). Project
+  `Aluki.Runtime.Conversation`. Migration `020_conversational_response.sql`
+  (`app.outbound_messages` table with idempotency constraint `(tenant_id,
+  correlation_message_id)`, RLS select+insert policies). `ConversationalResponseAgent`
+  (priority=100): claims all WhatsApp messages with sender+phoneNumberId; audio →
+  immediate acknowledgment (no LLM); text → parallel history+recall, LLM call via
+  `IChatModelRouter`, send reply, persist outbound record; US2 no-memory suffix
+  appended when `MemoryStatus.NoResult`; US4 graceful fallback on LLM/network
+  failure; memory ingestion is fire-and-forget `Task.Run` (so MemoryDomainAgent is
+  not needed for ingestion). `ConversationHistoryStore`: UNION of
+  `app.unified_message_artifact` (inbound) + `app.outbound_messages` (outbound),
+  sets RLS GUC, returns chronological turns. `ConversationOptions`: HistoryWindowSize,
+  LlmTimeoutSeconds, ErrorFallbackMessage, AudioAcknowledgmentMessage,
+  NoMemoryMessageSuffix. `IWhatsAppMessenger` extended with `SendTextMessageAsync`.
+- **SB-010 Billing & Package Management** — done (not yet deployed). Migration `021_billing.sql`
   (billing_catalog_versions/meter_prices/package_definition_versions/package_quota_rules as **global catalog
   tables, no RLS**; billing_accounts/package_subscriptions/billing_ledger_entries/credit_balances/
   credit_movements/invoices/invoice_lines/billing_audit_events as **tenant-scoped tables with RLS**;
@@ -196,7 +210,9 @@ documented intended behaviors without explicit instruction.
   `POST api/billing/credits/topup`, `GET api/billing/credits/{tenantId}`,
   `POST api/billing/accounts`, `GET api/billing/accounts/{tenantId}`,
   `POST api/billing/subscriptions`, `POST api/billing/catalog/versions|meter-prices|packages|quota-rules`.
-- Next per order: SB-011 (done). All SB-010 and SB-011 completed.
+  **Migration renumbering note**: was `020_billing.sql`, renamed to `021_billing.sql` — slot 020
+  was reserved for SB-000 Core Conversational Response.
+- Next per order: SB-011 (done). All SB-000, SB-010, SB-011 completed.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 

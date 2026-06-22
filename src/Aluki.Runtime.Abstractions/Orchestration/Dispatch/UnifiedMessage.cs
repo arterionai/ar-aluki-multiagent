@@ -10,7 +10,9 @@ public sealed record UnifiedMessage(
     string? Text,
     IReadOnlyList<UnifiedMediaRef> MediaRefs,
     DateTimeOffset ReceivedAtUtc,
-    string? CorrelationId = null);
+    string? CorrelationId = null,
+    string? SenderExternalId = null,
+    string? PhoneNumberId = null);
 
 /// <summary>Reference to a media artifact attached to a <see cref="UnifiedMessage"/>.</summary>
 public sealed record UnifiedMediaRef(
