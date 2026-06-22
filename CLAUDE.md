@@ -64,7 +64,72 @@ documented intended behaviors without explicit instruction.
   then terminal `delivery_failed` (sub-minute backoff rounds to the sweep tick —
   Durable-Functions follow-up). HTTP (Functions): `POST/GET api/reminders`,
   `POST api/reminders/{id}/snooze`, `DELETE api/reminders/{id}`. Config `Reminders:*`.
-- Next per order: SB-006, SB-009A, SB-008B, SB-007/008A, SB-009B, 010-012.
+- **SB-006 Delegated Reminders** — done (not yet deployed). Project
+  `Aluki.Runtime.DelegatedReminders` (mirrors SB-005). Migration
+  `012_delegated_reminders.sql` (delegated_reminders/delegated_recipient_contact/
+  delegated_consent_registry/delegated_delivery_attempt/delegated_audit_event +
+  tenant RLS + SECURITY DEFINER `app.claim_due_delegated_reminders`). Sender→
+  recipient reminders with 3-tier recipient resolution (Tier1=known WhatsApp handle,
+  Tier2=phone-only, Tier3=unknown→awaiting_consent). **Anti-spam**: 10/day rolling
+  window per sender (429 on breach). **Cancellation window**: 30s from due time
+  (generated column `cancel_deadline_utc`). **Retry**: 1/2/4/8/16s backoff (31s
+  total), up to 5 attempts; permanent failures notify sender (stub, WhatsApp follow-up).
+  **Consent gating**: Tier3 held as `awaiting_consent`; promoted to `scheduled` on
+  `opted_in` upsert. Re-verified at delivery time. **Sweep**: `DelegatedReminderSweepFunction`
+  (every minute), claims fresh-due + retry-due atomically via SECURITY DEFINER.
+  **Delivery = pluggable `IDelegatedReminderDeliveryChannel`** with logging stub
+  (`LoggingDelegatedReminderDeliveryChannel`). Idempotency key: external ID or
+  SHA256(`userId:recipient:dueUnixSeconds:contentLower`). HTTP (Functions):
+  `POST/GET api/delegated-reminders`, `DELETE api/delegated-reminders/{id}`.
+  Config `DelegatedReminders:*`.
+- **SB-009A Link Capture** — done (not yet deployed). Migration `013_link_capture.sql`
+  (link_artifacts/link_provenance_refs/link_pending_confirmations/link_enrichment_attempts/
+  link_enrichment_policy_decisions/link_audit_events + tenant RLS). URL detection +
+  canonical normalization + SHA256 hash dedup (`LinkCanonicalization`). Capture
+  outcomes: `created`, `upsert_merged` (same canonical URL + new source), `idempotent_noop`
+  (exact replay). One-time yes/no confirmation: atomic `TryConsumeConfirmationAsync`
+  (WHERE state='pending'), expiry sweep (`ExpireConfirmationsFunction`, every 5m).
+  Enrichment: policy-first (block private/loopback IPs), 4s timeout, fallback description,
+  fire-and-forget background scope. Recall: ILIKE substring search across url/label/description.
+  Implementation split: contracts/interfaces/canonicalization in `Aluki.Runtime.Abstractions/
+  Skills/LinkCapture`; repository/services/policy in `Aluki.Runtime.Host/Skills/LinkCapture/`;
+  HTTP endpoints in Functions (`LinkCaptureFunctions`). HTTP: `POST api/skills/link-capture/
+  capture|confirm|recall`. Config: no dedicated section (uses `Postgres:*` + `HttpClient`
+  "link-enrichment").
+- **SB-008B YouTube Link Save and Classification** — done (not yet deployed). Migration
+  `014_youtube_link_capture.sql` (saved_link_artifacts/link_enrichments/link_classifications/
+  link_capture_audit_events + tenant RLS). YouTube URL detection + canonical video ID extraction
+  (watch/shorts/embed/youtu.be/m.youtube.com), SHA256-style dedup by `canonical_video_id`.
+  Provider fallback chain: primary→secondary→degraded; enrichment states: `enriched`, `partial`,
+  `degraded`. AI classification: `IYouTubeClassificationProvider` with confidence labels
+  (`high`/`medium`/`low`) and uncertainty flags per field. Stubs: `LoggingYouTubeMetadataProvider`
+  (both primary+secondary), `StubYouTubeClassificationProvider`. Implementation split: contracts/
+  interfaces/canonicalizer in `Aluki.Runtime.Abstractions/Skills/YouTubeLinks`; repository/services/
+  stubs in `Aluki.Runtime.Host/Skills/YouTubeLinks/`; HTTP in Functions (`CaptureYoutubeLinksFunction`).
+  HTTP: `POST api/v1/skills/youtube-links/capture`. Config: uses `Postgres:*`.
+- **SB-007 Feedback Suggestions Capture** — done (not yet deployed). Migration
+  `015_feedback_suggestions.sql` (suggestions/suggestion_attachments/suggestion_state_transitions
+  + tenant+user RLS). Keyword-based intent detection stub. 30-min context window per tenant-user
+  (one active at a time). Attachment MIME/size validation (audio ≤50MB mp4/webm/ogg/mpeg,
+  photo ≤10MB JPEG/PNG, text ≤5KB inline). Lifecycle: captured→enriched→sent_user→archived
+  (one-way). Archival sweep timer (hourly, 90-day cutoff). Idempotency: `(message_id+payload_hash)`
+  partial unique index on active states. Implementation split: contracts/interfaces in
+  `Aluki.Runtime.Abstractions/Skills/Feedback`; repository/service in
+  `Aluki.Runtime.Host/Skills/Feedback/`; HTTP in Functions (`FeedbackFunctions`).
+  HTTP: `POST api/skills/feedback/capture|attach`. Config: uses `Postgres:*`.
+- **SB-008A Suggestions Admin and Rewards** — done (not yet deployed). Migration
+  `016_suggestions_admin.sql` (suggestion_admin_queue/suggestion_admin_audit_ledger/
+  reward_entitlement_ledger/reward_notification_delivery/reward_decision_record + tenant RLS,
+  no user filter — staff-wide). RBAC: AdminReviewer (captured→under_review, category/priority),
+  AdminApprover (all transitions), AdminAuditor (read-only). Audit ledger: WORM append-only
+  with bigserial sequence + SHA256 record_hash. Rewards: idempotency boundary
+  (tenant+user+suggestion+rule+sourceEventId), Granted/Duplicate/Conflict outcomes. Notification
+  sweep: 1/5/15/60/360min backoff, dead-letter after 5 attempts (stub delivery). Implementation
+  split: contracts in `Aluki.Runtime.Abstractions/Skills/SuggestionsAdmin`; repository/services
+  in `Aluki.Runtime.Host/Skills/SuggestionsAdmin/`; HTTP in Functions (`SuggestionsAdminFunctions`).
+  HTTP: `GET api/admin/suggestions`, `POST api/admin/suggestions/{id}/triage`,
+  `POST api/admin/rewards/decide`. Config: uses `Postgres:*`.
+- Next per order: SB-009B, 010-012.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 
