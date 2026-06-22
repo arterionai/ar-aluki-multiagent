@@ -118,7 +118,7 @@ public sealed class DbCaptureFixture : IAsyncLifetime
             "005_whatsapp_capture_rls.sql",
             "006_document_support.sql",
             "007_personal_memory.sql",
-            "008_ai_extraction.sql"
+            "009_ai_extraction.sql"
         };
 
         await using var connection = new NpgsqlConnection(connectionString);
