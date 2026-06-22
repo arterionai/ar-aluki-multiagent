@@ -25,6 +25,9 @@ public sealed record ClaimedReminder(
     string ReminderType,
     Guid? RecurrenceRuleId);
 
+/// <summary>Recurrence rule + anchor local time for next-occurrence computation.</summary>
+public sealed record RecurrenceContext(Time.ReminderRecurrence Rule, TimeOnly LocalTime);
+
 /// <summary>
 /// Scoped persistence for reminders. Applies the tenant/user session scope (RLS)
 /// before every per-tenant write and reuses the shared connection factory.
@@ -314,14 +317,18 @@ public sealed class ReminderStore
     /// <summary>
     /// Records a delivery attempt and transitions the reminder to its terminal
     /// state, under the reminder's own (tenant, creator) scope. Idempotent on the
-    /// natural key <c>(reminder_id, scheduled_time_utc, attempt_number)</c>.
+    /// natural key <c>(reminder_id, scheduled_time_utc, attempt_number)</c>. When a
+    /// recurring reminder is delivered and <paramref name="rescheduleToUtc"/> is
+    /// supplied, the reminder is re-armed (status <c>scheduled</c> at the next
+    /// occurrence) instead of going terminal.
     /// </summary>
     public async Task RecordDeliveryOutcomeAsync(
         ClaimedReminder reminder,
         int attemptNumber,
         ReminderDeliveryResult result,
         DateTimeOffset deliveredAt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DateTimeOffset? rescheduleToUtc = null)
     {
         var principal = ScopeFor(reminder);
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
@@ -355,15 +362,30 @@ public sealed class ReminderStore
             await attempt.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        var terminalStatus = delivered ? ReminderStatus.Delivered : ReminderStatus.DeliveryFailed;
+        // Recurring + delivered + has a next occurrence -> re-arm; else terminal.
+        var reschedule = delivered && rescheduleToUtc is not null;
+        var newStatus = reschedule
+            ? ReminderStatus.Scheduled
+            : (delivered ? ReminderStatus.Delivered : ReminderStatus.DeliveryFailed);
+
         await using (var update = new NpgsqlCommand(
-            """
-            update reminders set status = @status, updated_at_utc = now()
-            where reminder_id = @id;
-            """, connection, transaction))
+            reschedule
+                ? """
+                  update reminders set status = @status, scheduled_time_utc = @next, updated_at_utc = now()
+                  where reminder_id = @id;
+                  """
+                : """
+                  update reminders set status = @status, updated_at_utc = now()
+                  where reminder_id = @id;
+                  """, connection, transaction))
         {
-            update.Parameters.AddWithValue("status", terminalStatus);
+            update.Parameters.AddWithValue("status", newStatus);
             update.Parameters.AddWithValue("id", reminder.ReminderId);
+            if (reschedule)
+            {
+                update.Parameters.AddWithValue("next", rescheduleToUtc!.Value.ToUniversalTime());
+            }
+
             await update.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -373,7 +395,163 @@ public sealed class ReminderStore
             delivered ? null : new { failure_category = result.FailureCategory, attempt_number = attemptNumber },
             cancellationToken);
 
+        if (reschedule)
+        {
+            await WriteAuditAsync(connection, transaction, reminder.ReminderId, principal,
+                ReminderAuditEventType.Scheduled, reminder.CorrelationId,
+                new { next_occurrence_utc = rescheduleToUtc!.Value.ToUniversalTime() }, cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Idempotently creates a recurring reminder: the reminder row, its recurrence
+    /// rule, and the back-link, in one transaction. Returns the existing reminder on
+    /// idempotent replay.
+    /// </summary>
+    public async Task<ReminderCreation> CreateRecurringAsync(
+        PrincipalScope principal,
+        string reminderText,
+        DateTimeOffset firstOccurrenceUtc,
+        TimeOnly originalLocalTime,
+        string timezone,
+        string deliveryChannel,
+        string quotaTier,
+        string cadence,
+        string[]? daysOfWeek,
+        int? dayOfMonth,
+        string? endCondition,
+        DateTimeOffset? endDateUtc,
+        string idempotencyKey,
+        string correlationId,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await ScopedSessionContextSetter.ApplyAsync(connection, transaction, principal.TenantId, principal.UserId, cancellationToken);
+
+        ReminderCreation creation;
+        await using (var command = new NpgsqlCommand(
+            """
+            insert into reminders (
+                tenant_id, context_id, user_id, reminder_text, scheduled_time_utc,
+                original_time_local, timezone, reminder_type, delivery_channel,
+                quota_tier, status, idempotency_key, correlation_id)
+            values (
+                @tenant, @context, @user, @text, @scheduled,
+                @local_time, @tz, 'recurring', @channel,
+                @tier, 'scheduled', @idem, @correlation)
+            on conflict (tenant_id, idempotency_key)
+            do update set updated_at_utc = reminders.updated_at_utc
+            returning reminder_id, status, (xmax = 0) as is_new;
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("tenant", principal.TenantId);
+            command.Parameters.AddWithValue("context", ContextParam(principal));
+            command.Parameters.AddWithValue("user", principal.UserId);
+            command.Parameters.AddWithValue("text", reminderText);
+            command.Parameters.AddWithValue("scheduled", firstOccurrenceUtc.ToUniversalTime());
+            command.Parameters.Add(new NpgsqlParameter("local_time", NpgsqlDbType.Time) { Value = originalLocalTime.ToTimeSpan() });
+            command.Parameters.AddWithValue("tz", timezone);
+            command.Parameters.AddWithValue("channel", deliveryChannel);
+            command.Parameters.AddWithValue("tier", quotaTier);
+            command.Parameters.AddWithValue("idem", idempotencyKey);
+            command.Parameters.AddWithValue("correlation", correlationId);
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            creation = new ReminderCreation(reader.GetGuid(0), reader.GetBoolean(2), reader.GetString(1));
+        }
+
+        if (!creation.IsNew)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return creation;
+        }
+
+        Guid ruleId;
+        await using (var rule = new NpgsqlCommand(
+            """
+            insert into reminder_recurrence_rules (
+                reminder_id, tenant_id, cadence, day_of_week, day_of_month,
+                end_condition, end_date_utc)
+            values (@reminder, @tenant, @cadence, @dow, @dom, @end_cond, @end_date)
+            returning rule_id;
+            """, connection, transaction))
+        {
+            rule.Parameters.AddWithValue("reminder", creation.ReminderId);
+            rule.Parameters.AddWithValue("tenant", principal.TenantId);
+            rule.Parameters.AddWithValue("cadence", cadence);
+            rule.Parameters.Add(new NpgsqlParameter("dow", NpgsqlDbType.Array | NpgsqlDbType.Text)
+            {
+                Value = (object?)daysOfWeek ?? DBNull.Value
+            });
+            rule.Parameters.AddWithValue("dom", (object?)dayOfMonth ?? DBNull.Value);
+            rule.Parameters.AddWithValue("end_cond", (object?)endCondition ?? DBNull.Value);
+            rule.Parameters.AddWithValue("end_date", endDateUtc.HasValue ? endDateUtc.Value.ToUniversalTime() : (object)DBNull.Value);
+            ruleId = (Guid)(await rule.ExecuteScalarAsync(cancellationToken))!;
+        }
+
+        await using (var link = new NpgsqlCommand(
+            "update reminders set recurrence_rule_id = @rule where reminder_id = @id;", connection, transaction))
+        {
+            link.Parameters.AddWithValue("rule", ruleId);
+            link.Parameters.AddWithValue("id", creation.ReminderId);
+            await link.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await WriteAuditAsync(connection, transaction, creation.ReminderId, principal,
+            ReminderAuditEventType.Created, correlationId, new { reminder_type = "recurring", cadence }, cancellationToken);
+        await WriteAuditAsync(connection, transaction, creation.ReminderId, principal,
+            ReminderAuditEventType.Scheduled, correlationId,
+            new { scheduled_time_utc = firstOccurrenceUtc.ToUniversalTime() }, cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+        return creation;
+    }
+
+    /// <summary>
+    /// Reads the recurrence rule + original local time for a recurring reminder,
+    /// under its own (tenant, creator) scope. Returns null when there is no rule.
+    /// </summary>
+    public async Task<RecurrenceContext?> GetRecurrenceContextAsync(ClaimedReminder reminder, CancellationToken cancellationToken)
+    {
+        var principal = ScopeFor(reminder);
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await ScopedSessionContextSetter.ApplyAsync(connection, transaction, principal.TenantId, principal.UserId, cancellationToken);
+
+        await using var command = new NpgsqlCommand(
+            """
+            select r.original_time_local, rr.cadence, rr.day_of_week, rr.day_of_month,
+                   rr.end_condition, rr.end_date_utc
+            from reminders r
+            join reminder_recurrence_rules rr on rr.rule_id = r.recurrence_rule_id
+            where r.reminder_id = @id and rr.active = true;
+            """, connection, transaction);
+        command.Parameters.AddWithValue("id", reminder.ReminderId);
+
+        RecurrenceContext? context = null;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                var localTime = reader.IsDBNull(0) ? new TimeOnly(9, 0) : TimeOnly.FromTimeSpan(reader.GetTimeSpan(0));
+                var days = reader.IsDBNull(2) ? null : reader.GetFieldValue<string[]>(2);
+                context = new RecurrenceContext(
+                    new Time.ReminderRecurrence(
+                        Cadence: reader.GetString(1),
+                        DaysOfWeek: days,
+                        DayOfMonth: reader.IsDBNull(3) ? null : reader.GetInt32(3),
+                        EndCondition: reader.IsDBNull(4) ? null : reader.GetString(4),
+                        EndDateUtc: reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5)),
+                    localTime);
+            }
+        }
+
+        await transaction.RollbackAsync(cancellationToken);
+        return context;
     }
 
     /// <summary>Marks an overdue reminder as expired_undelivered, under its own scope.</summary>

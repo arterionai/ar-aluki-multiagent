@@ -27,13 +27,20 @@ Adapted to the real codebase (same deviations as SB-004):
 **Done in PR1**: foundation (schema, contracts, store, scope guard, DI), **US1
 one-shot** (create/list/snooze/cancel + lifecycle audit), creation-time **quota
 enforcement** (US3 core), and the fire-sweep with idempotent delivery + terminal
-`delivered`/`delivery_failed`/`expired_undelivered`. Tests: `ReminderPolicyTests`
-(unit), `ReminderContractTests` (contract), `ReminderLifecycleIntegrationTests`
-(integration: create/idempotency/snooze/cancel/quota/sweep).
+`delivered`/`delivery_failed`/`expired_undelivered`.
 
-**Deferred to follow-up PRs**: US2 recurring (recurrence calculator + DST; create
-currently returns `422 unsupported_recurrence`), multi-attempt retry backoff
-(5s/25s/125s), and the standalone telemetry emitter.
+**Done in PR2 — US2 recurring**: DST-safe `ReminderRecurrenceCalculator`
+(daily/weekly/monthly, IANA timezone, spring-forward/fall-back hold local time,
+day-31 clamp to last day, `until_date` end boundary). Recurring create validates
+the rule (deriving day-of-week / day-of-month from the start when omitted) and
+stores the first occurrence + recurrence rule; the fire-sweep re-arms each
+recurring reminder to its next occurrence after a successful delivery (status back
+to `scheduled`), one-shots stay terminal. Tests: `ReminderRecurrenceCalculatorTests`
+(16 unit incl. DST), recurring validation in `ReminderContractTests`, and recurring
+create + reschedule in `ReminderLifecycleIntegrationTests`.
+
+**Deferred to follow-up PRs**: multi-attempt retry backoff (5s/25s/125s) and the
+standalone telemetry emitter.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
