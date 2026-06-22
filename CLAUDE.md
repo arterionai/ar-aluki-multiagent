@@ -21,7 +21,21 @@ documented intended behaviors without explicit instruction.
     citations), US3 topic grouping + cross-channel continuity.
   - **WhatsApp→memory bridge**: captured messages are promoted to recall-able
     `memory_artifact` via `IMemoryIngestionSink` (best-effort, off the ack path).
-- Next per order: SB-004 (ai-extraction), SB-005, SB-003, SB-006, SB-009A,
+- **SB-004 AI Extraction** — in progress (not yet deployed). Project
+  `Aluki.Runtime.Extraction` (mirrors `Memory`). Migration `008_ai_extraction.sql`
+  (jobs/results/fields/audit + tenant RLS). US1 (audio→transcription+structured
+  facts) and US2 (text→summary/actions/decisions/entities) done; **US3 receipt
+  OCR (image) NOT yet implemented** — returns controlled 501 `not_implemented`.
+  Durable/async orchestration is a follow-up: processing runs inline today, the
+  status endpoint reflects the persisted lifecycle.
+  - HTTP (Functions): `POST api/extraction/execute`, `GET api/extraction/jobs/{jobId}`.
+  - Confidence tiers (per field): High ≥0.85, Medium 0.70–0.84 (flagged), Low
+    <0.70 (persisted but withheld from the surfaced set — no fabrication).
+  - Inference (Azure-only): transcription via Azure OpenAI Whisper
+    (`Extraction:Transcription:Endpoint/ApiKey/Deployment`, falls back to
+    `AiExtraction:*`); structured extraction via Foundry model-router
+    (`IChatModelRouter`).
+- Next per order: SB-004 US3 (receipt OCR), SB-005, SB-003, SB-006, SB-009A,
   SB-008B, SB-007/008A, SB-009B, 010-012.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
