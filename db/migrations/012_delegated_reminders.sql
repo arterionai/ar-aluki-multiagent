@@ -112,7 +112,7 @@ create table if not exists delegated_delivery_attempt (
     failure_detail text,
     correlation_id text,
     created_at_utc timestamptz not null default now(),
-    constraint ux_delivery_attempt_idem unique (tenant_id, delegated_reminder_id, attempt_index)
+    constraint ux_delegated_delivery_attempt_idem unique (tenant_id, delegated_reminder_id, attempt_index)
 );
 
 -- ── Audit events (immutable append-only) ────────────────────────────────────
