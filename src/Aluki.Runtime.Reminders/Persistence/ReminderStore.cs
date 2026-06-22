@@ -23,7 +23,8 @@ public sealed record ClaimedReminder(
     string DeliveryChannel,
     string? CorrelationId,
     string ReminderType,
-    Guid? RecurrenceRuleId);
+    Guid? RecurrenceRuleId,
+    int AttemptCount);
 
 /// <summary>Recurrence rule + anchor local time for next-occurrence computation.</summary>
 public sealed record RecurrenceContext(Time.ReminderRecurrence Rule, TimeOnly LocalTime);
@@ -308,19 +309,21 @@ public sealed class ReminderStore
                 DeliveryChannel: reader.GetString(7),
                 CorrelationId: reader.IsDBNull(8) ? null : reader.GetString(8),
                 ReminderType: reader.GetString(9),
-                RecurrenceRuleId: reader.IsDBNull(10) ? null : reader.GetGuid(10)));
+                RecurrenceRuleId: reader.IsDBNull(10) ? null : reader.GetGuid(10),
+                AttemptCount: reader.GetInt32(11)));
         }
 
         return results;
     }
 
     /// <summary>
-    /// Records a delivery attempt and transitions the reminder to its terminal
-    /// state, under the reminder's own (tenant, creator) scope. Idempotent on the
-    /// natural key <c>(reminder_id, scheduled_time_utc, attempt_number)</c>. When a
-    /// recurring reminder is delivered and <paramref name="rescheduleToUtc"/> is
-    /// supplied, the reminder is re-armed (status <c>scheduled</c> at the next
-    /// occurrence) instead of going terminal.
+    /// Records a delivery attempt and transitions the reminder, under its own
+    /// (tenant, creator) scope. Idempotent on <c>(reminder_id, scheduled_time_utc,
+    /// attempt_number)</c>. Outcomes:
+    ///   delivered + <paramref name="rescheduleToUtc"/> ⇒ recurring re-arm (scheduled);
+    ///   delivered ⇒ terminal delivered;
+    ///   transient failure + <paramref name="nextRetryUtc"/> ⇒ arm a retry (stays firing);
+    ///   else ⇒ terminal delivery_failed.
     /// </summary>
     public async Task RecordDeliveryOutcomeAsync(
         ClaimedReminder reminder,
@@ -328,7 +331,8 @@ public sealed class ReminderStore
         ReminderDeliveryResult result,
         DateTimeOffset deliveredAt,
         CancellationToken cancellationToken,
-        DateTimeOffset? rescheduleToUtc = null)
+        DateTimeOffset? rescheduleToUtc = null,
+        DateTimeOffset? nextRetryUtc = null)
     {
         var principal = ScopeFor(reminder);
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
@@ -336,17 +340,23 @@ public sealed class ReminderStore
         await ScopedSessionContextSetter.ApplyAsync(connection, transaction, principal.TenantId, principal.UserId, cancellationToken);
 
         var delivered = result.Status == DeliveryStatus.Delivered;
+        var retry = !delivered && nextRetryUtc is not null;
+        var reschedule = delivered && rescheduleToUtc is not null;
+
         var attemptStatus = delivered ? DeliveryStatus.Delivered
-            : (result.Status == DeliveryStatus.PermanentFailure ? DeliveryStatus.PermanentFailure : DeliveryStatus.TransientFailure);
+            : retry ? DeliveryStatus.RetryScheduled
+            : result.Status == DeliveryStatus.PermanentFailure ? DeliveryStatus.PermanentFailure
+            : DeliveryStatus.TransientFailure;
 
         await using (var attempt = new NpgsqlCommand(
             """
             insert into reminder_delivery_attempts (
                 reminder_id, tenant_id, scheduled_time_utc, attempt_number, status,
-                failure_category, failure_message, delivery_timestamp_utc, notification_id)
+                failure_category, failure_message, delivery_timestamp_utc,
+                next_retry_time_utc, notification_id)
             values (
                 @id, @tenant, @scheduled, @attempt, @status,
-                @fail_cat, @fail_msg, @delivered_at, @notif)
+                @fail_cat, @fail_msg, @delivered_at, @next_retry, @notif)
             on conflict (reminder_id, scheduled_time_utc, attempt_number) do nothing;
             """, connection, transaction))
         {
@@ -358,51 +368,93 @@ public sealed class ReminderStore
             attempt.Parameters.AddWithValue("fail_cat", (object?)result.FailureCategory ?? DBNull.Value);
             attempt.Parameters.AddWithValue("fail_msg", (object?)result.FailureMessage ?? DBNull.Value);
             attempt.Parameters.AddWithValue("delivered_at", delivered ? deliveredAt.ToUniversalTime() : (object)DBNull.Value);
+            attempt.Parameters.AddWithValue("next_retry", retry ? nextRetryUtc!.Value.ToUniversalTime() : (object)DBNull.Value);
             attempt.Parameters.AddWithValue("notif", (object?)result.NotificationId ?? DBNull.Value);
             await attempt.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        // Recurring + delivered + has a next occurrence -> re-arm; else terminal.
-        var reschedule = delivered && rescheduleToUtc is not null;
-        var newStatus = reschedule
-            ? ReminderStatus.Scheduled
-            : (delivered ? ReminderStatus.Delivered : ReminderStatus.DeliveryFailed);
-
-        await using (var update = new NpgsqlCommand(
-            reschedule
-                ? """
-                  update reminders set status = @status, scheduled_time_utc = @next, updated_at_utc = now()
-                  where reminder_id = @id;
-                  """
-                : """
-                  update reminders set status = @status, updated_at_utc = now()
-                  where reminder_id = @id;
-                  """, connection, transaction))
+        var (sql, bind) = BuildReminderTransition(reschedule, delivered, retry);
+        await using (var update = new NpgsqlCommand(sql, connection, transaction))
         {
-            update.Parameters.AddWithValue("status", newStatus);
             update.Parameters.AddWithValue("id", reminder.ReminderId);
-            if (reschedule)
-            {
-                update.Parameters.AddWithValue("next", rescheduleToUtc!.Value.ToUniversalTime());
-            }
-
+            bind(update, rescheduleToUtc, nextRetryUtc, attemptNumber);
             await update.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await WriteAuditAsync(connection, transaction, reminder.ReminderId, principal,
-            delivered ? ReminderAuditEventType.Delivered : ReminderAuditEventType.DeliveryFailed,
-            reminder.CorrelationId,
-            delivered ? null : new { failure_category = result.FailureCategory, attempt_number = attemptNumber },
-            cancellationToken);
-
-        if (reschedule)
+        // Audit the outcome.
+        if (delivered)
         {
             await WriteAuditAsync(connection, transaction, reminder.ReminderId, principal,
-                ReminderAuditEventType.Scheduled, reminder.CorrelationId,
-                new { next_occurrence_utc = rescheduleToUtc!.Value.ToUniversalTime() }, cancellationToken);
+                ReminderAuditEventType.Delivered, reminder.CorrelationId, null, cancellationToken);
+            if (reschedule)
+            {
+                await WriteAuditAsync(connection, transaction, reminder.ReminderId, principal,
+                    ReminderAuditEventType.Scheduled, reminder.CorrelationId,
+                    new { next_occurrence_utc = rescheduleToUtc!.Value.ToUniversalTime() }, cancellationToken);
+            }
+        }
+        else if (retry)
+        {
+            await WriteAuditAsync(connection, transaction, reminder.ReminderId, principal,
+                ReminderAuditEventType.Firing, reminder.CorrelationId,
+                new { attempt_number = attemptNumber, next_retry_utc = nextRetryUtc!.Value.ToUniversalTime(), failure_category = result.FailureCategory },
+                cancellationToken);
+        }
+        else
+        {
+            await WriteAuditAsync(connection, transaction, reminder.ReminderId, principal,
+                ReminderAuditEventType.DeliveryFailed, reminder.CorrelationId,
+                new { failure_category = result.FailureCategory, attempt_number = attemptNumber }, cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static (string Sql, Action<NpgsqlCommand, DateTimeOffset?, DateTimeOffset?, int> Bind) BuildReminderTransition(
+        bool reschedule, bool delivered, bool retry)
+    {
+        if (reschedule)
+        {
+            return (
+                """
+                update reminders set status = 'scheduled', scheduled_time_utc = @next,
+                    delivery_attempt_count = 0, next_retry_utc = null, updated_at_utc = now()
+                where reminder_id = @id;
+                """,
+                (cmd, next, _, _) => cmd.Parameters.AddWithValue("next", next!.Value.ToUniversalTime()));
+        }
+
+        if (delivered)
+        {
+            return (
+                """
+                update reminders set status = 'delivered', next_retry_utc = null, updated_at_utc = now()
+                where reminder_id = @id;
+                """,
+                (_, _, _, _) => { });
+        }
+
+        if (retry)
+        {
+            return (
+                """
+                update reminders set status = 'firing', next_retry_utc = @retry,
+                    delivery_attempt_count = @count, updated_at_utc = now()
+                where reminder_id = @id;
+                """,
+                (cmd, _, retryAt, count) =>
+                {
+                    cmd.Parameters.AddWithValue("retry", retryAt!.Value.ToUniversalTime());
+                    cmd.Parameters.AddWithValue("count", count);
+                });
+        }
+
+        return (
+            """
+            update reminders set status = 'delivery_failed', next_retry_utc = null, updated_at_utc = now()
+            where reminder_id = @id;
+            """,
+            (_, _, _, _) => { });
     }
 
     /// <summary>

@@ -217,29 +217,41 @@ public sealed class ReminderService
                     continue;
                 }
 
+                var attemptNumber = reminder.AttemptCount + 1;
                 var deliveryRequest = new ReminderDeliveryRequest(
                     reminder.ReminderId, reminder.TenantId, reminder.UserId, reminder.ContextId,
-                    reminder.ScheduledTimeUtc, AttemptNumber: 1, reminder.ReminderText,
+                    reminder.ScheduledTimeUtc, attemptNumber, reminder.ReminderText,
                     reminder.DeliveryChannel, reminder.Timezone,
                     reminder.CorrelationId ?? reminder.ReminderId.ToString("N"));
 
                 var result = await _deliveryChannel.DeliverAsync(deliveryRequest, cancellationToken);
+                var deliveredAt = _clock.GetUtcNow();
 
-                // Recurring reminders re-arm to their next occurrence after a
-                // successful delivery; one-shots go terminal.
-                DateTimeOffset? next = null;
-                if (result.Status == DeliveryStatus.Delivered &&
-                    string.Equals(reminder.ReminderType, ReminderType.Recurring, StringComparison.Ordinal))
+                if (result.Status == DeliveryStatus.Delivered)
                 {
-                    var context = await _store.GetRecurrenceContextAsync(reminder, cancellationToken);
-                    if (context is not null)
+                    // Recurring reminders re-arm to their next occurrence; one-shots go terminal.
+                    DateTimeOffset? next = null;
+                    if (string.Equals(reminder.ReminderType, ReminderType.Recurring, StringComparison.Ordinal))
                     {
-                        next = ReminderRecurrenceCalculator.NextOccurrence(
-                            context.Rule, context.LocalTime, reminder.Timezone, reminder.ScheduledTimeUtc);
+                        var context = await _store.GetRecurrenceContextAsync(reminder, cancellationToken);
+                        if (context is not null)
+                        {
+                            next = ReminderRecurrenceCalculator.NextOccurrence(
+                                context.Rule, context.LocalTime, reminder.Timezone, reminder.ScheduledTimeUtc);
+                        }
                     }
+
+                    await _store.RecordDeliveryOutcomeAsync(reminder, attemptNumber, result, deliveredAt, cancellationToken, rescheduleToUtc: next);
+                    continue;
                 }
 
-                await _store.RecordDeliveryOutcomeAsync(reminder, attemptNumber: 1, result, _clock.GetUtcNow(), cancellationToken, next);
+                // Transient failures with attempts remaining are retried with backoff;
+                // permanent failures and exhausted retries go terminal (delivery_failed).
+                var retryAt = result.Status == DeliveryStatus.PermanentFailure
+                    ? null
+                    : ReminderRetryPolicy.NextRetry(deliveredAt, attemptNumber, _options.MaxDeliveryAttempts);
+
+                await _store.RecordDeliveryOutcomeAsync(reminder, attemptNumber, result, deliveredAt, cancellationToken, nextRetryUtc: retryAt);
             }
             catch (OperationCanceledException)
             {
