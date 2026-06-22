@@ -21,13 +21,15 @@ documented intended behaviors without explicit instruction.
     citations), US3 topic grouping + cross-channel continuity.
   - **WhatsApp→memory bridge**: captured messages are promoted to recall-able
     `memory_artifact` via `IMemoryIngestionSink` (best-effort, off the ack path).
-- **SB-004 AI Extraction** — in progress (not yet deployed). Project
+- **SB-003 Calendar Integration** — done (merged to `main`, commit `354e612`;
+  not separately tracked in this section before). Google + Outlook providers,
+  connect/disconnect/create skills, callback security, `008_calendar_integration.sql`.
+- **SB-004 AI Extraction** — US1/US2/US3 done (not yet deployed). Project
   `Aluki.Runtime.Extraction` (mirrors `Memory`). Migration `008_ai_extraction.sql`
   (jobs/results/fields/audit + tenant RLS). US1 (audio→transcription+structured
-  facts) and US2 (text→summary/actions/decisions/entities) done; **US3 receipt
-  OCR (image) NOT yet implemented** — returns controlled 501 `not_implemented`.
-  Durable/async orchestration is a follow-up: processing runs inline today, the
-  status endpoint reflects the persisted lifecycle.
+  facts), US2 (text→summary/actions/decisions/entities), and **US3 receipt OCR
+  (image)** all done. Durable/async orchestration is a follow-up: processing runs
+  inline today, the status endpoint reflects the persisted lifecycle.
   - HTTP (Functions): `POST api/extraction/execute`, `GET api/extraction/jobs/{jobId}`.
   - Confidence tiers (per field): High ≥0.85, Medium 0.70–0.84 (flagged), Low
     <0.70 (persisted but withheld from the surfaced set — no fabrication).
@@ -35,8 +37,16 @@ documented intended behaviors without explicit instruction.
     (`Extraction:Transcription:Endpoint/ApiKey/Deployment`, falls back to
     `AiExtraction:*`); structured extraction via Foundry model-router
     (`IChatModelRouter`).
-- Next per order: SB-004 US3 (receipt OCR), SB-005, SB-003, SB-006, SB-009A,
-  SB-008B, SB-007/008A, SB-009B, 010-012.
+  - **US3 receipt OCR**: Azure vision OCR (`FoundryReceiptOcrProvider`) extracts
+    vendor/total/subtotal/tax/date + Mexican RFC. Clarified fallback chain:
+    structured OCR → text-only OCR (recovered fields capped at medium, warning
+    `ocr_fallback_used`) → unreadable ⇒ job `failed`/`ocr_failed_all` plus a
+    `manual_review_flagged` audit (no fabrication). RFC/amount/date validated in
+    `ReceiptNormalization`; present-but-invalid values are persisted-for-review but
+    withheld from the surfaced set. Config `Extraction:ReceiptOcr:Endpoint/ApiKey/
+    Deployment`, falling back to `Foundry:Endpoint/ApiKey` +
+    `Foundry:VisionDeployment`/`ChatDeployment`.
+- Next per order: SB-005, SB-006, SB-009A, SB-008B, SB-007/008A, SB-009B, 010-012.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 

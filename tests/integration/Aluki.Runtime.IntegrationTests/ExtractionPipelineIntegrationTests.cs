@@ -101,7 +101,7 @@ public sealed class ExtractionPipelineIntegrationTests
     }
 
     [Fact]
-    public async Task Image_input_returns_not_implemented_and_fails_job()
+    public async Task Receipt_structured_ocr_persists_fiscal_fields_and_completes()
     {
         if (!_fixture.Available)
         {
@@ -109,22 +109,74 @@ public sealed class ExtractionPipelineIntegrationTests
         }
 
         var seed = await _fixture.SeedPrincipalAsync();
-        var coordinator = BuildCoordinator();
-        var request = new ExtractionRequest(
-            Guid.NewGuid().ToString("N"), seed.TenantId, "c-img", Principal(seed),
-            new ExtractionInput(ExtractionInputType.Image, "upload", null, "jpg", null, null,
-                ImageData: Convert.ToBase64String([1, 2, 3]), ImageType: "receipt"),
-            null);
+        var ocr = FakeReceiptOcrProvider.Structured(
+            new ReceiptFieldCandidate("vendor", "text", "OXXO", 0.93),
+            new ReceiptFieldCandidate("total", "amount", "$123.45", 0.90, "MXN"),
+            new ReceiptFieldCandidate("date", "text", "15/03/2026", 0.88),
+            new ReceiptFieldCandidate("rfc", "text", "OXX970814HS9", 0.91));
+        var coordinator = BuildCoordinator(ocr);
 
-        var result = await coordinator.ProcessAsync(request, CancellationToken.None);
+        var result = await coordinator.ProcessAsync(ImageRequest(seed), CancellationToken.None);
 
-        Assert.Equal(501, result.StatusCode);
+        Assert.Equal(200, result.StatusCode);
         var response = Assert.IsType<ExtractionResponse>(result.Body);
-        Assert.Equal(ExtractionJobStatus.Failed, response.JobStatus);
-        Assert.Equal("failed", await JobStatus(seed.TenantId, response.JobId));
+        Assert.NotNull(response.ExtractionResults);
+        Assert.Equal(ExtractionType.ReceiptOcr, response.ExtractionResults!.ExtractionType);
+        // Fiscal fields surfaced (high confidence, validated).
+        Assert.Contains(response.ExtractionResults.ExtractedFields, f => f.FieldName == "vendor");
+        Assert.Contains(response.ExtractionResults.ExtractedFields, f => f.FieldName == "total");
+        Assert.Contains(response.ExtractionResults.ExtractedFields, f => f.FieldName == "rfc");
+        Assert.Equal(1, await CountResults(seed.TenantId, response.JobId));
+        Assert.True(await CountFields(seed.TenantId, response.JobId) >= 4);
     }
 
-    private ExtractionCoordinator BuildCoordinator()
+    [Fact]
+    public async Task Receipt_falls_back_to_text_only_ocr_and_warns()
+    {
+        if (!_fixture.Available)
+        {
+            return;
+        }
+
+        var seed = await _fixture.SeedPrincipalAsync();
+        var ocr = FakeReceiptOcrProvider.UnreadableStructured(
+            rawText: "FARMACIA GUADALAJARA\nTOTAL $58.00\nFECHA 12/04/2026\nRFC FGU081016SQ4");
+        var coordinator = BuildCoordinator(ocr);
+
+        var result = await coordinator.ProcessAsync(ImageRequest(seed), CancellationToken.None);
+
+        Assert.Equal(200, result.StatusCode);
+        var response = Assert.IsType<ExtractionResponse>(result.Body);
+        Assert.Equal(ExtractionJobStatus.CompletedWithWarnings, response.JobStatus);
+        Assert.NotNull(response.Warnings);
+        Assert.Contains(response.Warnings!, w => w.Code == ExtractionWarningCode.OcrFallbackUsed);
+        Assert.Equal("completed_with_warnings", await JobStatus(seed.TenantId, response.JobId));
+    }
+
+    [Fact]
+    public async Task Receipt_unreadable_after_both_attempts_flags_manual_review()
+    {
+        if (!_fixture.Available)
+        {
+            return;
+        }
+
+        var seed = await _fixture.SeedPrincipalAsync();
+        var ocr = FakeReceiptOcrProvider.UnreadableStructured(rawText: null);
+        var coordinator = BuildCoordinator(ocr);
+
+        var result = await coordinator.ProcessAsync(ImageRequest(seed), CancellationToken.None);
+
+        Assert.Equal(200, result.StatusCode);
+        var response = Assert.IsType<ExtractionResponse>(result.Body);
+        Assert.Equal(ExtractionJobStatus.Failed, response.JobStatus);
+        Assert.NotNull(response.Error);
+        Assert.Equal(ExtractionErrorCode.OcrFailedAll, response.Error!.Code);
+        Assert.Equal("failed", await JobStatus(seed.TenantId, response.JobId));
+        Assert.True(await CountAudit(seed.TenantId, response.JobId, ExtractionAuditEventType.ManualReviewFlagged) >= 1);
+    }
+
+    private ExtractionCoordinator BuildCoordinator(IReceiptOcrProvider? receiptOcr = null)
     {
         var factory = BuildFactory(_fixture.ConnectionString!);
         return new ExtractionCoordinator(
@@ -132,9 +184,16 @@ public sealed class ExtractionPipelineIntegrationTests
             new ExtractionStore(factory),
             new FakeTranscriptionProvider(),
             new FakeTextExtractionProvider(),
+            receiptOcr ?? FakeReceiptOcrProvider.Structured(),
             Options.Create(new ExtractionOptions()),
             NullLogger<ExtractionCoordinator>.Instance);
     }
+
+    private static ExtractionRequest ImageRequest(SeededPrincipal seed, string? extractionId = null) =>
+        new(extractionId ?? Guid.NewGuid().ToString("N"), seed.TenantId, "c-img", Principal(seed),
+            new ExtractionInput(ExtractionInputType.Image, "upload", null, "jpg", null, null,
+                ImageData: Convert.ToBase64String([1, 2, 3, 4]), ImageType: "receipt"),
+            null);
 
     private static ExtractionRequest TextRequest(SeededPrincipal seed, string text, string? extractionId = null) =>
         new(extractionId, seed.TenantId, "c1", Principal(seed),
@@ -225,5 +284,36 @@ public sealed class ExtractionPipelineIntegrationTests
                     new ExtractedFact("entity", ExtractionFieldType.Entity, new { name = "Ana", entity_type = "person" }, 0.5)
                 ],
                 new ModelInfo("Azure.AI.Foundry", "model-router", "v1")));
+    }
+
+    /// <summary>
+    /// AI-independent receipt OCR double. <see cref="Structured"/> returns a
+    /// readable structured result; <see cref="UnreadableStructured"/> forces the
+    /// text-only fallback (and, with a null raw text, the unreadable path).
+    /// </summary>
+    private sealed class FakeReceiptOcrProvider : IReceiptOcrProvider
+    {
+        private static readonly ModelInfo Model = new("Azure.AI.Foundry", "model-router", "vision-v1");
+
+        private readonly ReceiptOcrResult _structured;
+        private readonly string? _rawText;
+
+        private FakeReceiptOcrProvider(ReceiptOcrResult structured, string? rawText)
+        {
+            _structured = structured;
+            _rawText = rawText;
+        }
+
+        public static FakeReceiptOcrProvider Structured(params ReceiptFieldCandidate[] fields) =>
+            new(new ReceiptOcrResult(true, "raw receipt text", fields, Model), rawText: null);
+
+        public static FakeReceiptOcrProvider UnreadableStructured(string? rawText) =>
+            new(new ReceiptOcrResult(false, null, Array.Empty<ReceiptFieldCandidate>(), Model), rawText);
+
+        public Task<ReceiptOcrResult> ExtractStructuredAsync(byte[] image, string mediaType, string? languageHint, CancellationToken cancellationToken) =>
+            Task.FromResult(_structured);
+
+        public Task<string?> ExtractRawTextAsync(byte[] image, string mediaType, CancellationToken cancellationToken) =>
+            Task.FromResult(_rawText);
     }
 }
