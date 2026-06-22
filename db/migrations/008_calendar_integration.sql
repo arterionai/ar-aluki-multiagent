@@ -110,9 +110,14 @@ create table if not exists deduplication_records (
     status text not null check (status in ('in_progress', 'created', 'failed'))
 );
 
+-- "Active" can't be expressed as `window_expires_at_utc > now()` here: functions
+-- in an index predicate must be IMMUTABLE, and now() is STABLE. The concurrency
+-- guard is the in-progress row — two racing creates can't both hold an
+-- in_progress dedup for the same key. Time-window dedup of already-completed rows
+-- is enforced by the GetActiveAsync query filter (`window_expires_at_utc > now()`).
 create unique index if not exists ux_dedup_active_key
     on deduplication_records (tenant_id, context_id, user_id, provider, idempotency_key)
-    where window_expires_at_utc > now();
+    where status = 'in_progress';
 
 create table if not exists calendar_event_outcomes (
     calendar_event_outcome_id uuid primary key default gen_random_uuid(),
