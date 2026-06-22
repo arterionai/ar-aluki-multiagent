@@ -75,10 +75,7 @@ create table if not exists delegated_consent_registry (
     policy_version text not null default 'v1',
     source_event_id text not null,
     created_at_utc timestamptz not null default now(),
-    updated_at_utc timestamptz not null default now(),
-    constraint ux_consent_registry unique (
-        tenant_id, recipient_identity, consent_scope,
-        coalesce(sender_user_id::text, '*'))
+    updated_at_utc timestamptz not null default now()
 );
 
 -- ── Delivery attempts ───────────────────────────────────────────────────────
@@ -141,6 +138,10 @@ create index if not exists ix_delegated_reminders_tenant_status
     on delegated_reminders (tenant_id, status);
 create index if not exists ix_recipient_contact_lookup
     on delegated_recipient_contact (tenant_id, sender_user_id, recipient_identity);
+-- Expression index: treats NULL sender_user_id as '*' so global-scope consents
+-- (sender_user_id IS NULL) are also enforced as unique per (tenant,recipient,scope).
+create unique index if not exists ux_consent_registry
+    on delegated_consent_registry (tenant_id, recipient_identity, consent_scope, coalesce(sender_user_id::text, '*'));
 create index if not exists ix_consent_registry_lookup
     on delegated_consent_registry (tenant_id, recipient_identity);
 create index if not exists ix_delivery_attempt_reminder
