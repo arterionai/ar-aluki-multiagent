@@ -87,19 +87,34 @@ public sealed class ReminderContractTests
     }
 
     [Fact]
-    public async Task Recurring_request_returns_422_unsupported()
+    public async Task Recurring_with_invalid_cadence_returns_400()
     {
+        // Recurrence is validated before scope/DB, so this exercises no PostgreSQL.
         var request = new CreateReminderRequest(
             null, null, ValidPrincipal(), ReminderText: "Standup",
             ScheduledTimeUtc: DateTimeOffset.UtcNow.AddHours(1), Timezone: null,
             ReminderType: "recurring",
-            Recurrence: new ReminderRecurrenceInput("daily", null, null, "never", null),
+            Recurrence: new ReminderRecurrenceInput("yearly", null, null, "never", null),
             DeliveryChannel: null);
 
         var result = await BuildService().CreateAsync(request, CancellationToken.None);
-        Assert.Equal(422, result.StatusCode);
-        var body = Assert.IsType<ReminderResponse>(result.Body);
-        Assert.Equal(ReminderErrorCode.UnsupportedRecurrence, body.Error!.Code);
+        Assert.Equal(400, result.StatusCode);
+        var error = Assert.IsType<ReminderErrorResponse>(result.Body);
+        Assert.Equal(ReminderErrorCode.InvalidPayload, error.Code);
+    }
+
+    [Fact]
+    public async Task Recurring_monthly_with_invalid_day_returns_400()
+    {
+        var request = new CreateReminderRequest(
+            null, null, ValidPrincipal(), ReminderText: "Rent",
+            ScheduledTimeUtc: DateTimeOffset.UtcNow.AddHours(1), Timezone: null,
+            ReminderType: "recurring",
+            Recurrence: new ReminderRecurrenceInput("monthly", null, 40, "never", null),
+            DeliveryChannel: null);
+
+        var result = await BuildService().CreateAsync(request, CancellationToken.None);
+        Assert.Equal(400, result.StatusCode);
     }
 
     [Fact]

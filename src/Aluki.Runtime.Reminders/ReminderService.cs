@@ -4,6 +4,7 @@ using Aluki.Runtime.Reminders.Delivery;
 using Aluki.Runtime.Reminders.Persistence;
 using Aluki.Runtime.Reminders.Policies;
 using Aluki.Runtime.Reminders.Security;
+using Aluki.Runtime.Reminders.Time;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using TimeZoneConverter;
@@ -56,14 +57,29 @@ public sealed class ReminderService
             return BadRequest(correlationId, validation);
         }
 
-        // Recurring reminders are scheduled in a later milestone (US2).
-        if (string.Equals(request.ReminderType, ReminderType.Recurring, StringComparison.OrdinalIgnoreCase)
-            || request.Recurrence is not null)
+        var isRecurring = string.Equals(request.ReminderType, ReminderType.Recurring, StringComparison.OrdinalIgnoreCase)
+            || request.Recurrence is not null;
+
+        var timezone = ResolveTimezone(request.Timezone);
+        var requestedUtc = request.ScheduledTimeUtc!.Value;
+        var localTime = LocalTimeOfDay(requestedUtc, timezone) ?? TimeOnly.FromDateTime(requestedUtc.UtcDateTime);
+        var channel = ResolveChannel(request.DeliveryChannel);
+        var text = request.ReminderText!.Trim();
+
+        // Build (and validate) the recurrence rule before any scope/DB work so bad
+        // input fails fast with a 400.
+        ResolvedRecurrence? recurrence = null;
+        DateTimeOffset firstOccurrenceUtc = requestedUtc;
+        if (isRecurring)
         {
-            return new ReminderHttpResult(422, new ReminderResponse(
-                ReminderResponseStatus.Failed, correlationId,
-                Error: new ReminderError(ReminderErrorCode.UnsupportedRecurrence,
-                    "Recurring reminders are not yet supported (SB-005 US2).")));
+            var (resolved, recurrenceError) = ResolveRecurrence(request.Recurrence, request.ReminderType, requestedUtc, localTime, timezone);
+            if (recurrenceError is not null)
+            {
+                return BadRequest(correlationId, recurrenceError);
+            }
+
+            recurrence = resolved;
+            firstOccurrenceUtc = recurrence!.FirstOccurrenceUtc;
         }
 
         var principal = ToScope(request.PrincipalContext!);
@@ -72,9 +88,6 @@ public sealed class ReminderService
             _logger.LogWarning("reminder.scope_denied correlation_id={CorrelationId}", correlationId);
             return ScopeDenied(correlationId);
         }
-
-        var timezone = ResolveTimezone(request.Timezone);
-        var scheduledUtc = request.ScheduledTimeUtc!.Value;
 
         var quota = await _store.GetQuotaSnapshotAsync(principal, _options.DefaultQuotaLimit, cancellationToken);
         if (quota.ActiveCount >= quota.Limit)
@@ -86,16 +99,29 @@ public sealed class ReminderService
                     $"Active reminder limit reached ({quota.ActiveCount}/{quota.Limit}). Complete or cancel a reminder, or upgrade your plan.")));
         }
 
-        var localTime = LocalTimeOfDay(scheduledUtc, timezone);
-        var idempotencyKey = ReminderIdempotencyKey.Derive(request.ReminderId, principal.UserId, request.ReminderText!.Trim(), scheduledUtc);
+        var idempotencyKey = ReminderIdempotencyKey.Derive(request.ReminderId, principal.UserId, text, firstOccurrenceUtc);
 
-        var creation = await _store.CreateOneShotAsync(
-            principal, request.ReminderText!.Trim(), scheduledUtc, localTime, timezone,
-            ResolveChannel(request.DeliveryChannel), quota.EntitlementTier, idempotencyKey, correlationId, cancellationToken);
+        ReminderCreation creation;
+        string reminderType;
+        if (recurrence is not null)
+        {
+            reminderType = ReminderType.Recurring;
+            creation = await _store.CreateRecurringAsync(
+                principal, text, firstOccurrenceUtc, localTime, timezone, channel, quota.EntitlementTier,
+                recurrence.Cadence, recurrence.DaysOfWeek, recurrence.DayOfMonth, recurrence.EndCondition,
+                recurrence.EndDateUtc, idempotencyKey, correlationId, cancellationToken);
+        }
+        else
+        {
+            reminderType = ReminderType.OneShot;
+            creation = await _store.CreateOneShotAsync(
+                principal, text, firstOccurrenceUtc, localTime, timezone, channel, quota.EntitlementTier,
+                idempotencyKey, correlationId, cancellationToken);
+        }
 
         var dto = new ReminderDto(
-            creation.ReminderId, request.ReminderText!.Trim(), scheduledUtc, timezone,
-            ReminderType.OneShot, creation.Status, 0, ResolveChannel(request.DeliveryChannel));
+            creation.ReminderId, text, firstOccurrenceUtc, timezone,
+            reminderType, creation.Status, 0, channel);
 
         return new ReminderHttpResult(creation.IsNew ? 201 : 200, new ReminderResponse(
             ReminderResponseStatus.Created, correlationId, Reminder: dto,
@@ -198,7 +224,22 @@ public sealed class ReminderService
                     reminder.CorrelationId ?? reminder.ReminderId.ToString("N"));
 
                 var result = await _deliveryChannel.DeliverAsync(deliveryRequest, cancellationToken);
-                await _store.RecordDeliveryOutcomeAsync(reminder, attemptNumber: 1, result, _clock.GetUtcNow(), cancellationToken);
+
+                // Recurring reminders re-arm to their next occurrence after a
+                // successful delivery; one-shots go terminal.
+                DateTimeOffset? next = null;
+                if (result.Status == DeliveryStatus.Delivered &&
+                    string.Equals(reminder.ReminderType, ReminderType.Recurring, StringComparison.Ordinal))
+                {
+                    var context = await _store.GetRecurrenceContextAsync(reminder, cancellationToken);
+                    if (context is not null)
+                    {
+                        next = ReminderRecurrenceCalculator.NextOccurrence(
+                            context.Rule, context.LocalTime, reminder.Timezone, reminder.ScheduledTimeUtc);
+                    }
+                }
+
+                await _store.RecordDeliveryOutcomeAsync(reminder, attemptNumber: 1, result, _clock.GetUtcNow(), cancellationToken, next);
             }
             catch (OperationCanceledException)
             {
@@ -249,6 +290,108 @@ public sealed class ReminderService
 
         return null;
     }
+
+    private sealed record ResolvedRecurrence(
+        string Cadence, string[]? DaysOfWeek, int? DayOfMonth,
+        string? EndCondition, DateTimeOffset? EndDateUtc, DateTimeOffset FirstOccurrenceUtc);
+
+    /// <summary>
+    /// Validates the recurrence request, deriving the day-of-week / day-of-month
+    /// from the requested start when not supplied, and computes the first
+    /// occurrence on or after the start. Returns an error message on invalid input.
+    /// </summary>
+    private (ResolvedRecurrence? Resolved, string? Error) ResolveRecurrence(
+        ReminderRecurrenceInput? input, string? reminderType, DateTimeOffset requestedUtc, TimeOnly localTime, string timezone)
+    {
+        var cadence = (input?.Cadence ?? string.Empty).Trim().ToLowerInvariant();
+        if (cadence is not (ReminderCadence.Daily or ReminderCadence.Weekly or ReminderCadence.Monthly))
+        {
+            return (null, "recurrence.cadence must be one of daily, weekly, monthly.");
+        }
+
+        TZConvert.TryGetTimeZoneInfo(timezone, out var tz);
+        var localStart = TimeZoneInfo.ConvertTime(requestedUtc.ToUniversalTime(), tz!);
+
+        string[]? days = null;
+        int? dayOfMonth = null;
+
+        if (cadence == ReminderCadence.Weekly)
+        {
+            if (input?.DayOfWeek is { Length: > 0 } provided)
+            {
+                var normalized = new List<string>();
+                foreach (var d in provided)
+                {
+                    if (!ReminderRecurrenceCalculator.TryParseDay(d, out var dow))
+                    {
+                        return (null, $"recurrence.day_of_week contains an invalid day: '{d}'.");
+                    }
+
+                    normalized.Add(Abbrev(dow));
+                }
+
+                days = normalized.Distinct().ToArray();
+            }
+            else
+            {
+                // Derive the weekday from the requested start.
+                days = new[] { Abbrev(localStart.DayOfWeek) };
+            }
+        }
+        else if (cadence == ReminderCadence.Monthly)
+        {
+            if (input?.DayOfMonth is { } dom)
+            {
+                if (dom is < 1 or > 31)
+                {
+                    return (null, "recurrence.day_of_month must be between 1 and 31.");
+                }
+
+                dayOfMonth = dom;
+            }
+            else
+            {
+                dayOfMonth = localStart.Day;
+            }
+        }
+
+        var endCondition = input?.EndCondition?.Trim().ToLowerInvariant();
+        if (endCondition is not (null or "never" or "until_date"))
+        {
+            return (null, "recurrence.end_condition must be 'never' or 'until_date'.");
+        }
+
+        DateTimeOffset? endDate = null;
+        if (endCondition == "until_date")
+        {
+            if (input?.EndDateUtc is not { } end || end.ToUniversalTime() <= requestedUtc.ToUniversalTime())
+            {
+                return (null, "recurrence.end_date_utc must be after the start when end_condition is 'until_date'.");
+            }
+
+            endDate = end;
+        }
+
+        var rule = new ReminderRecurrence(cadence, days, dayOfMonth, endCondition, endDate);
+        var first = ReminderRecurrenceCalculator.FirstOccurrenceOnOrAfter(rule, localTime, timezone, requestedUtc);
+        if (first is null)
+        {
+            return (null, "Could not compute a recurrence occurrence for the given rule.");
+        }
+
+        return (new ResolvedRecurrence(cadence, days, dayOfMonth, endCondition, endDate, first.Value), null);
+    }
+
+    private static string Abbrev(DayOfWeek dow) => dow switch
+    {
+        DayOfWeek.Monday => "Mon",
+        DayOfWeek.Tuesday => "Tue",
+        DayOfWeek.Wednesday => "Wed",
+        DayOfWeek.Thursday => "Thu",
+        DayOfWeek.Friday => "Fri",
+        DayOfWeek.Saturday => "Sat",
+        _ => "Sun"
+    };
 
     private static string ResolveTimezone(string? timezone) =>
         string.IsNullOrWhiteSpace(timezone) ? DefaultTimezone : timezone!.Trim();

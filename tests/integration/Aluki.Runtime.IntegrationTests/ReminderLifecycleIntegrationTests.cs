@@ -162,6 +162,56 @@ public sealed class ReminderLifecycleIntegrationTests
         Assert.True(await CountAudit(seed.TenantId, created.Reminder.ReminderId, ReminderAuditEventType.Delivered) >= 1);
     }
 
+    [Fact]
+    public async Task Recurring_daily_create_persists_rule_and_reminder()
+    {
+        if (!_fixture.Available)
+        {
+            return;
+        }
+
+        var seed = await _fixture.SeedPrincipalAsync();
+        var clock = new FakeClock(DateTimeOffset.Parse("2026-07-01T10:00:00Z"));
+        var service = BuildService(clock);
+        var rec = new ReminderRecurrenceInput("daily", null, null, "never", null);
+
+        var result = await service.CreateAsync(RecurringRequest(seed, "Standup", clock.GetUtcNow().AddHours(1), rec), CancellationToken.None);
+
+        Assert.Equal(201, result.StatusCode);
+        var response = Assert.IsType<ReminderResponse>(result.Body);
+        Assert.Equal(ReminderType.Recurring, response.Reminder!.ReminderType);
+        Assert.Equal(1, await CountRecurrenceRules(seed.TenantId, response.Reminder.ReminderId));
+    }
+
+    [Fact]
+    public async Task Sweep_reschedules_recurring_to_next_occurrence()
+    {
+        if (!_fixture.Available)
+        {
+            return;
+        }
+
+        var seed = await _fixture.SeedPrincipalAsync();
+        var clock = new FakeClock(DateTimeOffset.Parse("2026-07-01T10:00:00Z"));
+        var channel = new RecordingChannel();
+        var service = BuildService(clock, channel);
+        var rec = new ReminderRecurrenceInput("daily", null, null, "never", null);
+        var created = Assert.IsType<ReminderResponse>(
+            (await service.CreateAsync(RecurringRequest(seed, "Standup", clock.GetUtcNow().AddMinutes(5), rec), CancellationToken.None)).Body);
+        var firstFire = created.Reminder!.ScheduledTimeUtc;
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+        await service.FireDueAsync(CancellationToken.None);
+
+        // Delivered once, then re-armed to the next day at the same local time (status back to scheduled).
+        Assert.Equal(1, channel.Calls);
+        Assert.Equal("scheduled", await ReminderStatusOf(seed.TenantId, created.Reminder.ReminderId));
+        var nextFire = await ScheduledTimeOf(seed.TenantId, created.Reminder.ReminderId);
+        Assert.Equal(firstFire.AddDays(1), nextFire);
+        Assert.Equal(1, await CountDeliveryAttempts(seed.TenantId, created.Reminder.ReminderId));
+        Assert.True(await CountAudit(seed.TenantId, created.Reminder.ReminderId, ReminderAuditEventType.Delivered) >= 1);
+    }
+
     private ReminderService BuildService(TimeProvider clock, IReminderDeliveryChannel? channel = null)
     {
         var factory = BuildFactory(_fixture.ConnectionString!);
@@ -177,6 +227,9 @@ public sealed class ReminderLifecycleIntegrationTests
     private static CreateReminderRequest CreateRequest(SeededPrincipal seed, string text, DateTimeOffset when, string? id = null) =>
         new(id, "c1", Principal(seed), text, when, "America/Mexico_City", "one_shot", null, "in_app");
 
+    private static CreateReminderRequest RecurringRequest(SeededPrincipal seed, string text, DateTimeOffset when, ReminderRecurrenceInput rec, string? id = null) =>
+        new(id, "c1", Principal(seed), text, when, "America/Mexico_City", "recurring", rec, "in_app");
+
     private static ReminderPrincipalContext Principal(SeededPrincipal seed) =>
         new(seed.TenantId, seed.ContextId, seed.UserId);
 
@@ -188,6 +241,27 @@ public sealed class ReminderLifecycleIntegrationTests
         command.Parameters.AddWithValue("t", tenantId);
         command.Parameters.AddWithValue("r", reminderId);
         return (string?)await command.ExecuteScalarAsync();
+    }
+
+    private async Task<int> CountRecurrenceRules(Guid tenantId, Guid reminderId)
+    {
+        await using var connection = await _fixture.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "select count(*) from reminder_recurrence_rules where tenant_id = @t and reminder_id = @r;", connection);
+        command.Parameters.AddWithValue("t", tenantId);
+        command.Parameters.AddWithValue("r", reminderId);
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    private async Task<DateTimeOffset> ScheduledTimeOf(Guid tenantId, Guid reminderId)
+    {
+        await using var connection = await _fixture.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "select scheduled_time_utc from reminders where tenant_id = @t and reminder_id = @r;", connection);
+        command.Parameters.AddWithValue("t", tenantId);
+        command.Parameters.AddWithValue("r", reminderId);
+        var value = (DateTime)(await command.ExecuteScalarAsync())!;
+        return new DateTimeOffset(DateTime.SpecifyKind(value, DateTimeKind.Utc), TimeSpan.Zero);
     }
 
     private async Task<int> CountReminders(Guid tenantId)
