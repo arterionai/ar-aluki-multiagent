@@ -176,7 +176,27 @@ documented intended behaviors without explicit instruction.
   HTTP in Functions (`SemanticGraphFunctions`).
   HTTP: `POST api/semantic-graph/resolve`, `GET/POST api/semantic-graph/entities|entities/{id}|entities/merge`,
   `GET api/semantic-graph/traverse|path`, `POST api/semantic-graph/relationships/{id}/archive`.
-- Next per order: SB-010.
+- **SB-010 Billing & Package Management** — done (not yet deployed). Migration `020_billing.sql`
+  (billing_catalog_versions/meter_prices/package_definition_versions/package_quota_rules as **global catalog
+  tables, no RLS**; billing_accounts/package_subscriptions/billing_ledger_entries/credit_balances/
+  credit_movements/invoices/invoice_lines/billing_audit_events as **tenant-scoped tables with RLS**;
+  ledger + credit_movements + billing_audit_events are WORM: SELECT+INSERT only).
+  **Two billing modes**: `payg` (per-meter unit price from published catalog) and `package`
+  (included quota → credit debit → billable overage or hard_stop). **Entitlement decision order**:
+  `allow_included` → `allow_credit` → `allow_overage` → `deny_hard_stop` → `deny_status` →
+  `idempotent_noop`. Idempotency enforced via `unique (tenant_id, idempotency_key)` on ledger and
+  credit_movements. **Invoice generation**: deterministic aggregation of PAYG/overage/adjustment
+  ledger entries per cycle window; idempotent by (tenant, cycle_start, cycle_end). **Credit topup**:
+  `BillingCycleService.TopUpCreditAsync` with idempotency key. Implementation split: contracts/
+  interfaces in `Aluki.Runtime.Abstractions/Billing/`; `BillingRepository`/`EntitlementService`/
+  `BillingCycleService` + `AddBilling()` in `Aluki.Runtime.Host/Skills/Billing/`; HTTP in
+  Functions (`BillingFunctions`).
+  HTTP: `POST api/billing/usage/record`, `GET api/billing/entitlements/{tenantId}`,
+  `POST api/billing/invoices/generate`, `GET api/billing/invoices`,
+  `POST api/billing/credits/topup`, `GET api/billing/credits/{tenantId}`,
+  `POST api/billing/accounts`, `GET api/billing/accounts/{tenantId}`,
+  `POST api/billing/subscriptions`, `POST api/billing/catalog/versions|meter-prices|packages|quota-rules`.
+- Next per order: SB-011 (done). All SB-010 and SB-011 completed.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 
