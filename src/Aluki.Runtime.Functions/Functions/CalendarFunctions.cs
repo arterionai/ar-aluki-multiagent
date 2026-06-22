@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Web;
 using Aluki.Runtime.Abstractions.Skills.Calendar;
+using Aluki.Runtime.Calendar.Connect;
 using Aluki.Runtime.Calendar.Skills;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
@@ -22,6 +23,7 @@ public sealed class CalendarFunctions
     private readonly CalendarCallbackSkill _callback;
     private readonly CalendarDisconnectSkill _disconnect;
     private readonly CalendarCreateSkill _create;
+    private readonly ICalendarConnectLinkService _links;
     private readonly ILogger<CalendarFunctions> _logger;
 
     public CalendarFunctions(
@@ -29,12 +31,14 @@ public sealed class CalendarFunctions
         CalendarCallbackSkill callback,
         CalendarDisconnectSkill disconnect,
         CalendarCreateSkill create,
+        ICalendarConnectLinkService links,
         ILogger<CalendarFunctions> logger)
     {
         _connect = connect;
         _callback = callback;
         _disconnect = disconnect;
         _create = create;
+        _links = links;
         _logger = logger;
     }
 
@@ -69,6 +73,10 @@ public sealed class CalendarFunctions
         });
     }
 
+    /// <summary>
+    /// Provider redirect target. A browser lands here, so it renders a friendly HTML
+    /// success/error page (not JSON).
+    /// </summary>
     [Function("CalendarCallback")]
     public async Task<HttpResponseData> CallbackAsync(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "calendar/callback")] HttpRequestData request,
@@ -81,23 +89,89 @@ public sealed class CalendarFunctions
         var provider = query["provider"];
 
         if (!string.IsNullOrEmpty(error))
-            return await Json(request, HttpStatusCode.BadRequest, new { error = "provider_error", provider_error = error });
+            return await Html(request, HttpStatusCode.OK, CalendarConsentPages.RenderError(
+                "Cancelaste el permiso o el proveedor devolvió un error."));
 
-        if (string.IsNullOrWhiteSpace(state) || string.IsNullOrWhiteSpace(code))
-            return await Json(request, HttpStatusCode.BadRequest, new { error = "missing_params", message = "state and code are required." });
-
-        if (!TryParseProvider(provider, out var calendarProvider))
-            return await Json(request, HttpStatusCode.BadRequest, new { error = "invalid_provider", message = "provider query parameter must be 'outlook' or 'google'." });
+        if (string.IsNullOrWhiteSpace(state) || string.IsNullOrWhiteSpace(code) || !TryParseProvider(provider, out var calendarProvider))
+            return await Html(request, HttpStatusCode.OK, CalendarConsentPages.RenderError(
+                "La respuesta del proveedor no es válida."));
 
         var result = await _callback.ExecuteAsync(new OAuthCallbackRequest(
             state, code, calendarProvider, Guid.NewGuid().ToString("N")), ct);
 
-        if (!result.Success)
-            return await Json(request, HttpStatusCode.BadRequest,
-                new { error = "callback_rejected", outcome_reference = result.OutcomeReference });
+        return await Html(request, HttpStatusCode.OK, result.Success
+            ? CalendarConsentPages.RenderSuccess(calendarProvider)
+            : CalendarConsentPages.RenderError("No se pudo validar la conexión. El enlace pudo expirar o ya fue usado."));
+    }
 
-        return await Json(request, HttpStatusCode.OK,
-            new { status = "connection_established", outcome_reference = result.OutcomeReference });
+    /// <summary>
+    /// Mints a signed, short-lived connect link for a user. The orchestrator calls this
+    /// (e.g. when a schedule request needs a not-yet-connected provider) and sends the
+    /// returned <c>start_url</c> to the user over WhatsApp.
+    /// </summary>
+    [Function("CalendarConnectLink")]
+    public async Task<HttpResponseData> ConnectLinkAsync(
+        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "calendar/connect/link")] HttpRequestData request,
+        CancellationToken ct)
+    {
+        var body = await ReadJsonAsync<CalendarConnectHttpRequest>(request, ct);
+        if (body is null)
+            return await Json(request, HttpStatusCode.BadRequest, new { error = "invalid_body", message = "Invalid JSON body." });
+
+        if (!TryParseProvider(body.Provider, out var provider))
+            return await Json(request, HttpStatusCode.BadRequest, new { error = "invalid_provider", message = "provider must be 'outlook' or 'google'." });
+
+        if (body.TenantId == Guid.Empty || body.ContextId == Guid.Empty || body.UserId == Guid.Empty)
+            return await Json(request, HttpStatusCode.BadRequest, new { error = "missing_fields", message = "tenant_id, context_id, and user_id are required." });
+
+        var startUrl = _links.CreateStartUrl(body.TenantId, body.ContextId, body.UserId, provider);
+        return await Json(request, HttpStatusCode.OK, new { start_url = startUrl, provider = provider.ToString().ToLowerInvariant() });
+    }
+
+    /// <summary>
+    /// Human-facing consent page reached by clicking the connect link. Explains what
+    /// will happen; the OAuth flow only starts when the user submits the form (→ begin).
+    /// </summary>
+    [Function("CalendarConnectStart")]
+    public async Task<HttpResponseData> ConnectStartAsync(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "calendar/connect/start")] HttpRequestData request,
+        CancellationToken ct)
+    {
+        var token = HttpUtility.ParseQueryString(request.Url.Query)["token"];
+        if (!_links.TryValidateToken(token, out var payload))
+            return await Html(request, HttpStatusCode.OK, CalendarConsentPages.RenderExpired());
+
+        var beginUrl = $"{request.Url.GetLeftPart(UriPartial.Authority)}/api/calendar/connect/begin";
+        await Task.CompletedTask;
+        return await Html(request, HttpStatusCode.OK,
+            CalendarConsentPages.RenderConsent(payload.Provider, beginUrl, token!));
+    }
+
+    /// <summary>
+    /// Invoked when the user agrees on the consent page. Validates the signed token,
+    /// starts the OAuth flow (creates the single-use state), and redirects the browser
+    /// to the provider's official sign-in page.
+    /// </summary>
+    [Function("CalendarConnectBegin")]
+    public async Task<HttpResponseData> ConnectBeginAsync(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "calendar/connect/begin")] HttpRequestData request,
+        CancellationToken ct)
+    {
+        var form = HttpUtility.ParseQueryString(await new StreamReader(request.Body).ReadToEndAsync(ct));
+        if (!_links.TryValidateToken(form["token"], out var payload))
+            return await Html(request, HttpStatusCode.OK, CalendarConsentPages.RenderExpired());
+
+        var outcome = await _connect.ExecuteAsync(new CalendarConnectRequest(
+            payload.TenantId, payload.ContextId, payload.UserId, payload.Provider,
+            Guid.NewGuid().ToString("N")), ct);
+
+        if (!outcome.IsSuccess)
+            return await Html(request, HttpStatusCode.OK, CalendarConsentPages.RenderError(
+                "No tienes permiso para conectar un calendario en este contexto."));
+
+        var response = request.CreateResponse(HttpStatusCode.Redirect);
+        response.Headers.Add("Location", outcome.Result!.ConnectUrl);
+        return response;
     }
 
     [Function("CalendarDisconnect")]
@@ -165,10 +239,20 @@ public sealed class CalendarFunctions
             _ => HttpStatusCode.InternalServerError,
         };
 
-        return await Json(request, status, SerializeOutcome(result));
+        // When the user must connect first, hand back a ready-to-send connect link for
+        // the provider they asked for so the orchestrator can surface it over WhatsApp.
+        string? connectUrl = null;
+        if (result.OutcomeType == CalendarOutcomeType.ReconnectRequired)
+        {
+            var target = TryParseProvider(body.ProviderHint, out var hinted) ? hinted : result.SelectedProvider;
+            if (target is not null)
+                connectUrl = _links.CreateStartUrl(body.TenantId, body.ContextId, body.UserId, target.Value);
+        }
+
+        return await Json(request, status, SerializeOutcome(result, connectUrl));
     }
 
-    private static object SerializeOutcome(CalendarCreateResult r) => new
+    private static object SerializeOutcome(CalendarCreateResult r, string? connectUrl = null) => new
     {
         outcome_type = r.OutcomeType.ToString().ToLowerInvariant(),
         outcome_reference = r.OutcomeReference,
@@ -181,6 +265,7 @@ public sealed class CalendarFunctions
         selected_provider = r.SelectedProvider?.ToString().ToLowerInvariant(),
         selection_reason = r.SelectionReason,
         reconnect_required = r.ReconnectRequired,
+        connect_url = connectUrl,
     };
 
     private static async Task<T?> ReadJsonAsync<T>(HttpRequestData request, CancellationToken ct) where T : class
@@ -200,6 +285,14 @@ public sealed class CalendarFunctions
         var response = request.CreateResponse(status);
         await response.WriteAsJsonAsync(payload);
         response.StatusCode = status; // WriteAsJsonAsync forces 200; restore intended status
+        return response;
+    }
+
+    private static async Task<HttpResponseData> Html(HttpRequestData request, HttpStatusCode status, string html)
+    {
+        var response = request.CreateResponse(status);
+        response.Headers.Add("Content-Type", "text/html; charset=utf-8");
+        await response.WriteStringAsync(html);
         return response;
     }
 

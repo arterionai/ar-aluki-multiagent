@@ -52,6 +52,19 @@ documented intended behaviors without explicit instruction.
     api/calendar/disconnect`, `POST api/calendar/create_event`. The deployed env needs
     the `Calendar:*` app settings/Key Vault refs (incl. `TokenEncryptionKey` + per-provider
     `ClientSecret`) and the provider redirect URI set to `{FunctionBaseUrl}/api/calendar/callback`.
+  - **User-facing consent flow** (so unknown end-users connect their own calendars
+    safely): `ICalendarConnectLinkService` mints a signed, short-lived link
+    (HMAC, `Calendar:LinkSigningKey` → falls back to `TokenEncryptionKey`,
+    `Calendar:ConnectLinkExpiryMinutes` default 30) encoding `(tenant,context,user,provider)`.
+    Functions: `POST api/calendar/connect/link` (Function-auth, returns `start_url` for the
+    orchestrator to send over WhatsApp) → `GET api/calendar/connect/start` (Anonymous, renders
+    a Spanish HTML **consent page** explaining the permissions/security; no OAuth yet) → `POST
+    api/calendar/connect/begin` (Anonymous, only on user consent: runs the connect skill and
+    302-redirects to the provider sign-in). The deployed `callback` now renders friendly
+    success/error HTML (`CalendarConsentPages`). `create_event` ⇒ `reconnect_required` carries
+    a ready `connect_url`. Multi-tenant note: register ONE OAuth app per provider; Microsoft
+    must be multi-tenant (`TenantId=common`) and Google's consent screen must be Published +
+    verified (sensitive `calendar.events` scope) for arbitrary users.
 - **SB-004 AI Extraction** — US1/US2/US3 done (not yet deployed). Project
   `Aluki.Runtime.Extraction` (mirrors `Memory`). Migration `009_ai_extraction.sql`
   (jobs/results/fields/audit + tenant RLS). US1 (audio→transcription+structured

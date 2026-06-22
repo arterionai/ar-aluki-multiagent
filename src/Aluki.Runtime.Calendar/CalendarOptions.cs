@@ -12,6 +12,15 @@ public sealed class CalendarOptions
     /// </summary>
     public string TokenEncryptionKey { get; init; } = "";
 
+    /// <summary>
+    /// Optional base64 HMAC key for signing the user-facing connect links. Falls back
+    /// to <see cref="TokenEncryptionKey"/> when unset.
+    /// </summary>
+    public string LinkSigningKey { get; init; } = "";
+
+    /// <summary>How long a connect link stays valid before the user must request a new one.</summary>
+    public int ConnectLinkExpiryMinutes { get; init; } = 30;
+
     public OutlookProviderOptions Outlook { get; init; } = new();
     public GoogleProviderOptions Google { get; init; } = new();
 }

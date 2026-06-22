@@ -46,6 +46,9 @@ public static class CalendarServiceExtensions
         services.AddScoped<IOAuthTokenExchanger>(sp => sp.GetRequiredService<GoogleOAuthTokenExchanger>());
         services.AddScoped<ICalendarTokenService, CalendarTokenService>();
 
+        // User-facing connect links (signed, short-lived) + consent landing page.
+        services.AddSingleton<Connect.ICalendarConnectLinkService, Connect.CalendarConnectLinkService>();
+
         // Provider adapters (typed HttpClients so they call the real Graph/Google APIs).
         services.AddHttpClient<OutlookCalendarProvider>();
         services.AddScoped<ICalendarProvider>(sp => sp.GetRequiredService<OutlookCalendarProvider>());
