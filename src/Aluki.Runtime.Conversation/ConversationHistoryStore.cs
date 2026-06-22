@@ -42,7 +42,7 @@ public sealed class ConversationHistoryStore : IConversationHistoryStore
                     message_text   as body,
                     'inbound'      as direction,
                     created_at_utc as created_at
-                from app.unified_message_artifact
+                from unified_message_artifact
                 where tenant_id = @tenant_id
                   and created_by_user_id = @user_id
                   and message_text is not null
