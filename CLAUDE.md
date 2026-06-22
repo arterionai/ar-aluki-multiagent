@@ -145,7 +145,22 @@ documented intended behaviors without explicit instruction.
   post-capture. Abstractions in `Aluki.Runtime.Abstractions/Orchestration/Dispatch/`;
   `MessageDispatcher`/`DispatchAuditStore`/`NullMessageDispatcher` in
   `Aluki.Runtime.Capture/Dispatch/`; `MemoryDomainAgent` in `Aluki.Runtime.Memory/Dispatch/`.
-- Next per order: SB-010, SB-011, SB-012.
+- **SB-012 Governance & Security** — done (not yet deployed). Migration
+  `018_governance_security.sql` (consent_records/policy_rules/policy_decision_log +
+  tenant RLS). **Consent**: generic grant/revoke/check/list — broader than
+  delegated_consent_registry (SB-006); partial unique index enforces one active
+  consent per (tenant,grantor,grantee,type). **Policy rules**: tenant-configurable
+  rules (quota/budget/feature_flag/compliance/fraud_risk) evaluated in priority order;
+  first deny wins, then warn, then allow. `PolicyDecisionEngine` defaults to allow
+  with `no_applicable_rules` when no active rules match. Every evaluation is
+  WORM-persisted to `policy_decision_log`. **ConsentType** constants:
+  DelegatedReminderSend, ShareMemory, ViewCalendar, SendFeedbackOnBehalf.
+  Implementation split: contracts/interfaces in `Aluki.Runtime.Abstractions/Governance/`;
+  `GovernanceRepository`/`PolicyDecisionEngine`/`ConsentManager` + `AddGovernance()` in
+  `Aluki.Runtime.Host/Skills/Governance/`; HTTP in Functions (`GovernanceFunctions`).
+  HTTP: `POST api/governance/policy/evaluate`, `GET/POST api/governance/policy/rules`,
+  `POST api/governance/consent/grant|revoke`, `GET api/governance/consent/check|by-grantor|by-grantee`.
+- Next per order: SB-010, SB-011.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 

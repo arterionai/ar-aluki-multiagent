@@ -2,6 +2,7 @@ using Aluki.Runtime.Capture;
 using Aluki.Runtime.Host;
 using Aluki.Runtime.Host.Calendar;
 using Aluki.Runtime.Host.Skills.Feedback;
+using Aluki.Runtime.Host.Skills.Governance;
 using Aluki.Runtime.Host.Skills.LinkCapture;
 using Aluki.Runtime.Host.Skills.SuggestionsAdmin;
 using Aluki.Runtime.Host.Skills.YouTubeLinks;
@@ -43,6 +44,9 @@ builder.Services.AddYouTubeLinkCapture(builder.Configuration);
 // Feedback suggestions capture (SB-007).
 builder.Services.AddFeedbackCapture(builder.Configuration);
 builder.Services.AddSuggestionsAdmin(builder.Configuration);
+
+// Governance & Security (SB-012): consent, policy rules, decision engine.
+builder.Services.AddGovernance(builder.Configuration);
 
 // Background heartbeat (existing runtime worker)
 builder.Services.AddHostedService<Worker>();
