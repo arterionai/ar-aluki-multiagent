@@ -12,6 +12,7 @@
     <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="2.1.0" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Http" Version="3.3.0" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Storage.Queues" Version="5.5.0" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Timer" Version="4.3.1" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Sdk" Version="2.0.4" OutputItemType="Analyzer" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
     <PackageReference Include="Azure.Storage.Blobs" Version="12.22.2" />
@@ -23,6 +24,7 @@
     <ProjectReference Include="..\Aluki.Runtime.Capture\Aluki.Runtime.Capture.csproj" />
     <ProjectReference Include="..\Aluki.Runtime.Memory\Aluki.Runtime.Memory.csproj" />
     <ProjectReference Include="..\Aluki.Runtime.Extraction\Aluki.Runtime.Extraction.csproj" />
+    <ProjectReference Include="..\Aluki.Runtime.Reminders\Aluki.Runtime.Reminders.csproj" />
   </ItemGroup>
 
 </Project>

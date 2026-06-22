@@ -46,7 +46,26 @@ documented intended behaviors without explicit instruction.
     withheld from the surfaced set. Config `Extraction:ReceiptOcr:Endpoint/ApiKey/
     Deployment`, falling back to `Foundry:Endpoint/ApiKey` +
     `Foundry:VisionDeployment`/`ChatDeployment`.
-- Next per order: SB-005, SB-006, SB-009A, SB-008B, SB-007/008A, SB-009B, 010-012.
+- **SB-005 Scheduled Reminders** — US1 done (not yet deployed). Project
+  `Aluki.Runtime.Reminders` (mirrors `Memory`/`Extraction`). Migration
+  `010_reminders.sql` (reminders/recurrence_rules/delivery_attempts/audit/quotas +
+  tenant RLS + SECURITY DEFINER `app.claim_due_reminders`). One-shot create/list/
+  snooze/cancel + creation-time quota enforcement + lifecycle audit. **Scheduling =
+  timer-sweep** (`ReminderSweepFunction`, every minute) not Durable Functions
+  (follow-up); cross-tenant claim via `app.claim_due_reminders` (SKIP LOCKED).
+  **Delivery = pluggable `IReminderDeliveryChannel`** with a logging/persisting stub
+  (`LoggingReminderDeliveryChannel`) until a real outbound channel exists. HTTP
+  (Functions): `POST/GET api/reminders`, `POST api/reminders/{id}/snooze`,
+  `DELETE api/reminders/{id}`. Deferred: US2 recurring (create returns `422
+  unsupported_recurrence`), multi-attempt retry backoff. Config `Reminders:*`.
+- Next per order: SB-005 (US2 recurring + retry backoff), SB-006, SB-009A, SB-008B,
+  SB-007/008A, SB-009B, 010-012.
+- **Known pre-existing failures (SB-003, separate from above)**: 5 calendar
+  integration tests fail on `main` — `CalendarSecurityAndAuditIntegrationTests.
+  Redact_removes_sensitive_field_values` (4 cases) and
+  `CalendarProviderSelectionIntegrationTests.Hint_with_no_matching_connection_
+  returns_no_provider`. Latent since SB-003 (its deploy never validated); not caused
+  by reminders. Fix tracked separately.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 

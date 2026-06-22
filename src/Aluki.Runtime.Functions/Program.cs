@@ -4,6 +4,7 @@ using Aluki.Runtime.Capture.Media;
 using Aluki.Runtime.Extraction;
 using Aluki.Runtime.Functions.Media;
 using Aluki.Runtime.Memory;
+using Aluki.Runtime.Reminders;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -14,6 +15,7 @@ var host = new HostBuilder()
         services.AddWhatsAppCapture(context.Configuration);
         services.AddPersonalMemory(context.Configuration);
         services.AddAiExtraction(context.Configuration);
+        services.AddReminders(context.Configuration);
 
         // Outbound delivery feedback (read receipt + typing indicator) via Graph API.
         services.AddHttpClient<IWhatsAppMessenger, MetaWhatsAppMessenger>();
