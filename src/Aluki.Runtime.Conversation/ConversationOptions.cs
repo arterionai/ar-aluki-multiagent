@@ -13,7 +13,18 @@ public sealed class ConversationOptions
     public string NoMemoryMessageSuffix { get; set; } =
         " Si quieres, compárteme esa información y la guardo para ti.";
 
-    public string OnboardingInstruction { get; set; } =
+    public string SecurityPrivacyResponse { get; set; } =
+        """
+        🔒 Tus datos están guardados en la nube de Microsoft Azure, en una base de datos privada que solo tú puedes ver. Nadie más tiene acceso a tus notas, recordatorios o conversaciones.
+
+        Tus datos *no se comparten con terceros* ni se usan para entrenar modelos de IA. Si conectaste Google u Outlook, los permisos se guardan cifrados y solo se usan cuando tú pides crear un evento.
+
+        Aluki está en beta privada, operada por Arterion AI. Antes del lanzamiento público publicaremos una política de privacidad completa.
+
+        Si en algún momento quieres que eliminemos toda tu información, solo pídenoslo y lo hacemos. 🙏
+        """;
+
+
         """
         This is the user's FIRST message ever. Begin your reply with a brief, warm welcome that:
         1. Introduces yourself as Aluki and mentions you are in a testing/beta phase — the team wants real

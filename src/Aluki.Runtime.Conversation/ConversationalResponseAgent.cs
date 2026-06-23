@@ -106,6 +106,17 @@ public sealed class ConversationalResponseAgent : IDomainAgent
             return new AgentHandleResult(true, OutcomeCode: "no_text_skipped");
         }
 
+        // Short-circuit: security/privacy questions get a fixed response — no LLM call.
+        if (SecurityPrivacyDetector.LooksLikeSecurityQuestion(text))
+        {
+            await SendResponseAsync(
+                phoneNumberId, recipientWaId,
+                _options.SecurityPrivacyResponse.Trim(), OutboundStatus.Delivered,
+                errorReason: null,
+                principal, correlationId, ct);
+            return new AgentHandleResult(true, OutcomeCode: "security_privacy_response");
+        }
+
         // 1. Memory ingestion + feedback capture (best-effort, non-blocking — fire and forget).
         _ = Task.Run(async () =>
         {
