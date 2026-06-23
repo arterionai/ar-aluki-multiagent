@@ -11,11 +11,24 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="2.1.0" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Http" Version="3.3.0" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Storage.Queues" Version="5.5.0" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Timer" Version="4.3.1" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Sdk" Version="2.0.4" OutputItemType="Analyzer" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.22.2" />
+    <PackageReference Include="Azure.Storage.Queues" Version="12.20.1" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Aluki.Runtime.Abstractions\Aluki.Runtime.Abstractions.csproj" />
+    <ProjectReference Include="..\Aluki.Runtime.Calendar\Aluki.Runtime.Calendar.csproj" />
+    <ProjectReference Include="..\Aluki.Runtime.Capture\Aluki.Runtime.Capture.csproj" />
+    <ProjectReference Include="..\Aluki.Runtime.Memory\Aluki.Runtime.Memory.csproj" />
+    <ProjectReference Include="..\Aluki.Runtime.Extraction\Aluki.Runtime.Extraction.csproj" />
+    <ProjectReference Include="..\Aluki.Runtime.Reminders\Aluki.Runtime.Reminders.csproj" />
+    <ProjectReference Include="..\Aluki.Runtime.DelegatedReminders\Aluki.Runtime.DelegatedReminders.csproj" />
+    <ProjectReference Include="..\Aluki.Runtime.Conversation\Aluki.Runtime.Conversation.csproj" />
+    <ProjectReference Include="..\Aluki.Runtime.Host\Aluki.Runtime.Host.csproj" />
   </ItemGroup>
 
 </Project>

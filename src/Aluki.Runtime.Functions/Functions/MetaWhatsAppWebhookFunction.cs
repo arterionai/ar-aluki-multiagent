@@ -1,8 +1,11 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using Aluki.Runtime.Capture;
+using Aluki.Runtime.Capture.Channels.WhatsApp;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
+using Microsoft.Extensions.Logging;
 
 namespace Aluki.Runtime.Functions.Functions;
 
@@ -12,9 +15,23 @@ public sealed class MetaWhatsAppWebhookFunction
     private const string AppSecretSetting = "Meta__AppSecret";
     private const string SignatureHeader = "x-hub-signature-256";
 
+    private readonly WhatsAppCaptureCoordinator _coordinator;
+    private readonly IWhatsAppMessenger _messenger;
+    private readonly ILogger<MetaWhatsAppWebhookFunction> _logger;
+
+    public MetaWhatsAppWebhookFunction(
+        WhatsAppCaptureCoordinator coordinator,
+        IWhatsAppMessenger messenger,
+        ILogger<MetaWhatsAppWebhookFunction> logger)
+    {
+        _coordinator = coordinator;
+        _messenger = messenger;
+        _logger = logger;
+    }
+
     [Function("MetaWhatsAppWebhookVerify")]
     public HttpResponseData Verify(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "webhooks/meta/whatsapp")]
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "whatsapp")]
         HttpRequestData request)
     {
         var query = ParseQuery(request.Url.Query);
@@ -39,7 +56,7 @@ public sealed class MetaWhatsAppWebhookFunction
 
     [Function("MetaWhatsAppWebhookInbound")]
     public async Task<HttpResponseData> InboundAsync(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "webhooks/meta/whatsapp")]
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "whatsapp")]
         HttpRequestData request,
         CancellationToken cancellationToken)
     {
@@ -53,6 +70,56 @@ public sealed class MetaWhatsAppWebhookFunction
             {
                 return request.CreateResponse(HttpStatusCode.Unauthorized);
             }
+        }
+
+        // Map the Meta payload to capture envelopes and dispatch each through the
+        // pipeline. Always acknowledge 200 so Meta does not retry the batch;
+        // idempotency makes any genuine redelivery safe.
+        try
+        {
+            var payload = Encoding.UTF8.GetString(body);
+
+            // Immediately acknowledge each inbound message to the sender: blue ticks
+            // (read receipt) + the typing indicator. Best-effort, never blocks capture.
+            foreach (var target in MetaWebhookMapper.ExtractReadReceiptTargets(payload))
+            {
+                try
+                {
+                    await _messenger.MarkReadAndShowTypingAsync(target.PhoneNumberId, target.MessageId, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Failed to send read/typing indicator. provider_message_id={MessageId}",
+                        target.MessageId);
+                }
+            }
+
+            var envelopes = MetaWebhookMapper.Map(payload);
+            foreach (var envelope in envelopes)
+            {
+                try
+                {
+                    var outcome = await _coordinator.CaptureAsync(envelope, cancellationToken);
+                    _logger.LogInformation(
+                        "Meta inbound captured. provider_message_id={ProviderMessageId} outcome={Outcome} correlation_id={CorrelationId}",
+                        envelope.ProviderMessageId,
+                        outcome.Kind,
+                        outcome.CorrelationId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Meta inbound capture failed. provider_message_id={ProviderMessageId}",
+                        envelope.ProviderMessageId);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to parse Meta webhook payload.");
         }
 
         var response = request.CreateResponse(HttpStatusCode.OK);

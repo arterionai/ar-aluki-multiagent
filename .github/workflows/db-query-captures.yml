@@ -1,0 +1,104 @@
+name: DB Query Recent Captures
+
+# Manual, read-only diagnostic: prints the most recent captured messages for a
+# tenant (default: the live E2E tenant) to the run log. Intended for verifying
+# end-to-end capture content during testing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: Tenant id to query
+        required: false
+        default: "44444444-4444-4444-4444-444444444444"
+      limit:
+        description: Max rows
+        required: false
+        default: "10"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: ar-Aluki
+  KEYVAULT_NAME: kvaralukidev6155
+  POSTGRES_SERVER_NAME: pg-araluki-dev-6155
+  POSTGRES_SECRET_NAME: PostgresConnectionString
+
+jobs:
+  query:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Open database firewall for runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER_IP="$(curl -s https://api.ipify.org)"
+          az postgres flexible-server firewall-rule create \
+            --resource-group "$RESOURCE_GROUP" \
+            --server-name "$POSTGRES_SERVER_NAME" \
+            --name "ghquery-${{ github.run_id }}" \
+            --start-ip-address "$RUNNER_IP" \
+            --end-ip-address "$RUNNER_IP" \
+            --output none
+
+      - name: Query recent captures
+        shell: bash
+        env:
+          TENANT_ID: ${{ github.event.inputs.tenant_id }}
+          ROW_LIMIT: ${{ github.event.inputs.limit }}
+        run: |
+          set -euo pipefail
+          CONN="$(az keyvault secret show --vault-name "$KEYVAULT_NAME" --name "$POSTGRES_SECRET_NAME" --query value -o tsv)"
+          echo "::add-mask::$CONN"
+          CONN_LINES="${CONN//;/$'\n'}"
+          while IFS= read -r pair; do
+            [ -z "$pair" ] && continue
+            key="$(printf '%s' "${pair%%=*}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            val="$(printf '%s' "${pair#*=}" | sed 's/^[[:space:]]*//')"
+            case "$key" in
+              host|server) PGHOST="$val" ;;
+              port) PGPORT="$val" ;;
+              database|"database name"|db) PGDATABASE="$val" ;;
+              username|"user id"|user|uid) PGUSER="$val" ;;
+              password|pwd) PGPASSWORD="$val" ;;
+              "ssl mode"|sslmode) PGSSLMODE_RAW="$val" ;;
+            esac
+          done <<< "$CONN_LINES"
+          export PGHOST PGDATABASE PGUSER PGPASSWORD
+          export PGPORT="${PGPORT:-5432}"
+          case "$(printf '%s' "${PGSSLMODE_RAW:-Require}" | tr '[:upper:]' '[:lower:]')" in
+            disable) export PGSSLMODE="disable" ;;
+            *) export PGSSLMODE="require" ;;
+          esac
+          echo "::add-mask::$PGPASSWORD"
+
+          psql -v ON_ERROR_STOP=1 -P pager=off \
+            -c "select created_at_utc, message_kind, capture_status, provider_message_id, left(coalesce(message_text,'(no text)'), 1000) as message_text
+                from unified_message_artifact
+                where tenant_id = '${TENANT_ID}'
+                order by created_at_utc desc
+                limit ${ROW_LIMIT};"
+
+      - name: Remove database firewall rule
+        if: always()
+        shell: bash
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group "$RESOURCE_GROUP" \
+            --server-name "$POSTGRES_SERVER_NAME" \
+            --name "ghquery-${{ github.run_id }}" \
+            --yes --output none || true

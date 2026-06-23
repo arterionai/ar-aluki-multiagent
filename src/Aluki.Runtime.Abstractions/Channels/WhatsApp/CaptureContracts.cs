@@ -24,7 +24,37 @@ public static class CaptureAuditEvent
     public const string DuplicateSuppressed = "capture.duplicate_suppressed";
     public const string UnsupportedPayload = "capture.unsupported_payload";
     public const string ScopeDenied = "capture.scope_denied";
+    public const string RetryScheduled = "capture.retry_scheduled";
     public const string FailedTerminal = "capture.failed_terminal";
+}
+
+public static class CapturePayloadType
+{
+    public const string Text = "text";
+    public const string Image = "image";
+    public const string Audio = "audio";
+    public const string Document = "document";
+    public const string Forwarded = "forwarded";
+    public const string Unsupported = "unsupported";
+
+    /// <summary>Media-bearing supported kinds whose binary can be downloaded.</summary>
+    public static bool IsMedia(string? type) => type is Image or Audio or Document;
+
+    public static bool IsSupported(string? type) => type is Text or Image or Audio or Document or Forwarded;
+
+    public static bool IsKnown(string? type) => IsSupported(type) || type == Unsupported;
+}
+
+/// <summary>
+/// Persisted capture_status values (see data-model.md). Distinct from the
+/// acknowledgment <see cref="CaptureStatus"/> surfaced over the wire.
+/// </summary>
+public static class CapturePersistedStatus
+{
+    public const string Accepted = "accepted";
+    public const string DuplicateSuppressed = "duplicate_suppressed";
+    public const string Unsupported = "unsupported";
+    public const string FailedTerminal = "failed_terminal";
 }
 
 public sealed record CaptureAck(

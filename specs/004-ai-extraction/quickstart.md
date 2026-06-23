@@ -88,6 +88,25 @@ Expected result:
 - `is_unreadable=true` and `manual_review_required=true`.
 - No invented vendor/amount/date/RFC values.
 
+### US3 implementation evidence (2026-06-22)
+
+Receipt OCR landed in `Aluki.Runtime.Extraction` (mirroring US1/US2). Contract
+mapping for the scenarios above:
+
+- Readable receipt ⇒ `extraction_type=receipt_ocr`, fields `vendor`/`total`/
+  `subtotal`/`tax`/`date`/`rfc` with per-field confidence + tier. Validated RFC is
+  uppercased/canonicalized; amounts and dates are normalized (`ReceiptNormalization`).
+- Structured OCR empty ⇒ text-only fallback; recovered fields capped at medium
+  confidence with warning `ocr_fallback_used` (job `completed_with_warnings`).
+- Both attempts empty ("unreadable" + "manual review required") ⇒ job `failed`
+  with `error_category=ocr_failed_all`, warning `unreadable_fragment`, and a
+  `manual_review_flagged` audit event. No fabricated fields.
+- "Never invent": present-but-invalid RFC/amount/date values are persisted for
+  review but kept below the surfacing threshold (withheld from `extracted_fields`).
+- Covered by `ReceiptExtractionNormalizationTests` (unit), the receipt cases in
+  `ExtractionContractTests` (contract), and `ExtractionPipelineIntegrationTests`
+  (integration: structured success, fallback warning, unreadable/manual-review).
+
 ## Scenario 5: Async Job Lifecycle
 
 Objective: validate durable lifecycle behavior for long-running jobs.

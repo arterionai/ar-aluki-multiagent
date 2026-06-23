@@ -1,28 +1,35 @@
 using System.Net;
 using System.Text.Json;
 using Aluki.Runtime.Abstractions.Channels.WhatsApp;
-using Aluki.Runtime.Functions.Channels.WhatsApp;
+using Aluki.Runtime.Capture;
+using Aluki.Runtime.Capture.Failure;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 
 namespace Aluki.Runtime.Functions.Functions;
 
+/// <summary>
+/// Isolated-worker HTTP ingress for inbound WhatsApp events. Validates the
+/// envelope and dispatches the shared capture pipeline
+/// (<see cref="WhatsAppCaptureCoordinator"/>), returning contract-compliant
+/// ack/error responses. This is the deployable counterpart of the Host endpoint.
+/// </summary>
 public sealed class WhatsAppInboundFunction
 {
-    private static readonly HashSet<string> SupportedPayloadTypes =
-    [
-        "text",
-        "image",
-        "audio",
-        "forwarded",
-        "unsupported"
-    ];
-
-    private readonly InMemoryCaptureStore _store;
-
-    public WhatsAppInboundFunction(InMemoryCaptureStore store)
+    private static readonly HashSet<string> KnownPayloadTypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        _store = store;
+        CapturePayloadType.Text,
+        CapturePayloadType.Image,
+        CapturePayloadType.Audio,
+        CapturePayloadType.Forwarded,
+        CapturePayloadType.Unsupported
+    };
+
+    private readonly WhatsAppCaptureCoordinator _coordinator;
+
+    public WhatsAppInboundFunction(WhatsAppCaptureCoordinator coordinator)
+    {
+        _coordinator = coordinator;
     }
 
     [Function("WhatsAppInbound")]
@@ -31,20 +38,22 @@ public sealed class WhatsAppInboundFunction
         HttpRequestData request,
         CancellationToken cancellationToken)
     {
-        var envelope = await JsonSerializer.DeserializeAsync<WhatsAppInboundEnvelope>(
-            request.Body,
-            cancellationToken: cancellationToken);
+        WhatsAppInboundEnvelope? envelope;
+        try
+        {
+            envelope = await JsonSerializer.DeserializeAsync<WhatsAppInboundEnvelope>(
+                request.Body,
+                cancellationToken: cancellationToken);
+        }
+        catch (JsonException)
+        {
+            envelope = null;
+        }
 
         if (envelope is null)
         {
-            return await CreateErrorAsync(
-                request,
-                HttpStatusCode.BadRequest,
-                correlationId: Guid.NewGuid().ToString("N"),
-                code: CaptureErrorCode.InvalidPayload,
-                message: "Request body is missing or invalid JSON.",
-                auditEvent: null,
-                cancellationToken);
+            return await BadRequestAsync(
+                request, Guid.NewGuid().ToString("N"), "Request body is missing or invalid JSON.", cancellationToken);
         }
 
         var correlationId = string.IsNullOrWhiteSpace(envelope.CorrelationId)
@@ -54,53 +63,15 @@ public sealed class WhatsAppInboundFunction
         var validationError = Validate(envelope);
         if (validationError is not null)
         {
-            return await CreateErrorAsync(
-                request,
-                HttpStatusCode.BadRequest,
-                correlationId,
-                CaptureErrorCode.InvalidPayload,
-                validationError,
-                auditEvent: null,
-                cancellationToken);
+            return await BadRequestAsync(request, correlationId, validationError, cancellationToken);
         }
 
-        if (!TryResolveTenant(envelope.ContextMetadata?.TenantHint, out var tenantId))
-        {
-            return await CreateErrorAsync(
-                request,
-                HttpStatusCode.Forbidden,
-                correlationId,
-                CaptureErrorCode.ScopeDenied,
-                "Missing or invalid tenant_hint in context_metadata.",
-                CaptureAuditEvent.ScopeDenied,
-                cancellationToken);
-        }
+        var outcome = await _coordinator.CaptureAsync(envelope, cancellationToken);
+        var mapped = CaptureFailureMapper.Map(outcome);
 
-        var idempotencyKey = $"{tenantId:D}|{envelope.SourceChannel}|{envelope.ProviderMessageId}";
-        var storeResult = _store.Upsert(idempotencyKey);
-
-        var status = envelope.Payload.Type.Equals("unsupported", StringComparison.OrdinalIgnoreCase)
-            ? CaptureStatus.AcceptedUnsupported
-            : storeResult.IsDuplicate
-                ? CaptureStatus.DuplicateSuppressed
-                : CaptureStatus.Accepted;
-
-        var auditEvent = status switch
-        {
-            CaptureStatus.DuplicateSuppressed => CaptureAuditEvent.DuplicateSuppressed,
-            CaptureStatus.AcceptedUnsupported => CaptureAuditEvent.UnsupportedPayload,
-            _ => CaptureAuditEvent.Accepted
-        };
-
-        var ack = new CaptureAck(
-            Status: status,
-            CorrelationId: correlationId,
-            IdempotencyKey: idempotencyKey,
-            CanonicalMessageId: storeResult.CanonicalMessageId,
-            AuditEvent: auditEvent);
-
-        var response = request.CreateResponse(HttpStatusCode.Accepted);
-        await response.WriteAsJsonAsync(ack, cancellationToken);
+        var response = request.CreateResponse();
+        await response.WriteAsJsonAsync(mapped.Body, cancellationToken);
+        response.StatusCode = (HttpStatusCode)mapped.StatusCode;
         return response;
     }
 
@@ -126,7 +97,7 @@ public sealed class WhatsAppInboundFunction
             return "payload.type is required.";
         }
 
-        if (!SupportedPayloadTypes.Contains(envelope.Payload.Type))
+        if (!KnownPayloadTypes.Contains(envelope.Payload.Type))
         {
             return "payload.type is invalid.";
         }
@@ -134,29 +105,22 @@ public sealed class WhatsAppInboundFunction
         return null;
     }
 
-    private static bool TryResolveTenant(string? tenantHint, out Guid tenantId)
-    {
-        return Guid.TryParse(tenantHint, out tenantId);
-    }
-
-    private static async Task<HttpResponseData> CreateErrorAsync(
+    private static async Task<HttpResponseData> BadRequestAsync(
         HttpRequestData request,
-        HttpStatusCode statusCode,
         string correlationId,
-        string code,
         string message,
-        string? auditEvent,
         CancellationToken cancellationToken)
     {
-        var response = request.CreateResponse(statusCode);
         var error = new CaptureError(
             Status: CaptureStatus.Rejected,
             CorrelationId: correlationId,
-            Code: code,
+            Code: CaptureErrorCode.InvalidPayload,
             Message: message,
-            AuditEvent: auditEvent);
+            AuditEvent: null);
 
+        var response = request.CreateResponse();
         await response.WriteAsJsonAsync(error, cancellationToken);
+        response.StatusCode = HttpStatusCode.BadRequest;
         return response;
     }
 }

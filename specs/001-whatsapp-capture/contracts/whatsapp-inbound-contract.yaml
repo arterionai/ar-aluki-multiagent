@@ -87,7 +87,7 @@ components:
       properties:
         type:
           type: string
-          enum: [text, image, audio, forwarded, unsupported]
+          enum: [text, image, audio, document, forwarded, unsupported]
         text:
           type: string
         media:
@@ -101,7 +101,7 @@ components:
       properties:
         media_type:
           type: string
-          enum: [image, audio]
+          enum: [image, audio, document]
         content_type:
           type: string
         provider_media_id:

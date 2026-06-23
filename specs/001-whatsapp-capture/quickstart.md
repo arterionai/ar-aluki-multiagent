@@ -88,6 +88,56 @@ Expected outcomes:
 - Audit event samples for mandatory lifecycle events
 - Duplicate suppression and scope denial query evidence
 
+## Implementation Verification Notes
+
+The capture foundation is implemented in `src/Aluki.Runtime.Host` (webhook ingress
++ skill pipeline) over the abstractions in `src/Aluki.Runtime.Abstractions`.
+
+### Build
+
+```bash
+dotnet restore Aluki.Runtime.slnx
+dotnet build Aluki.Runtime.slnx
+```
+
+### Run the host (webhook on /api/channels/whatsapp/inbound)
+
+```bash
+dotnet run --project src/Aluki.Runtime.Host/Aluki.Runtime.Host.csproj
+# Health probe:
+curl -s http://localhost:5000/health
+```
+
+### Tests
+
+```bash
+# Unit + contract (no database required)
+dotnet test --filter Category=Unit
+dotnet test --filter Category=Contract
+
+# Integration: coordinator reliability/SLA run without a DB; the DB-backed
+# persistence/isolation tests activate when a database is provided.
+export ALUKI_TEST_POSTGRES="Host=localhost;Database=aluki_test;Username=postgres;Password=postgres"
+dotnet test --filter Category=Integration
+```
+
+The integration fixture auto-applies migrations `001`–`005` to the target
+database (the `vector` extension from migration 002 must be installed).
+
+### Scenario-to-test mapping
+
+| Quickstart scenario | Automated coverage |
+|---------------------|--------------------|
+| 1 Supported capture path | `WhatsAppCapturePersistenceTests`, `NormalizeWhatsAppInboundSkillTests` |
+| 2 Duplicate suppression | `WhatsAppCapturePersistenceTests` |
+| 3 Scope denial | `CaptureScopeIsolationTests` |
+| 4 Unsupported continuity | `NormalizeWhatsAppInboundSkillTests` (+ persistence path) |
+| 5 Retry / terminal failure | `CaptureRetryReliabilityTests` |
+| 6 Latency SLO | `CaptureSlaTelemetryTests` + load baseline |
+
+See `checklists/implementation-evidence.md` for the full FR/SC traceability and
+`docs/CAPTURE_OPERATIONS.md` for the operational runbook.
+
 ## References
 
 - Spec: `specs/001-whatsapp-capture/spec.md`
