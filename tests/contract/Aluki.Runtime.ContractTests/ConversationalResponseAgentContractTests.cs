@@ -22,6 +22,7 @@ public sealed class ConversationalResponseAgentContractTests
     {
         return new ConversationalResponseAgent(
             ingestionSink: null!,
+            feedbackSink: null!,
             recallService: null!,
             chatRouter: null!,
             messenger: messenger ?? new StubWhatsAppMessenger(),
