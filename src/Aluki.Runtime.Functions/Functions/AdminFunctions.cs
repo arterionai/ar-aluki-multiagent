@@ -110,7 +110,7 @@ public sealed class AdminFunctions
             {
                 await using var outCmd = new NpgsqlCommand("""
                     SELECT COUNT(*) FROM app.outbound_messages
-                    WHERE sent_at >= NOW() - INTERVAL '30 days'
+                    WHERE created_at_utc >= NOW() - INTERVAL '30 days'
                     """, conn);
                 outboundMessages = (long)(await outCmd.ExecuteScalarAsync() ?? 0L);
             }
@@ -303,10 +303,10 @@ public sealed class AdminFunctions
             try
             {
                 await using var cmd = new NpgsqlCommand("""
-                    SELECT DATE(sent_at) AS day, COUNT(*) AS count
+                    SELECT DATE(created_at_utc) AS day, COUNT(*) AS count
                     FROM app.outbound_messages
-                    WHERE sent_at >= NOW() - INTERVAL '30 days'
-                    GROUP BY DATE(sent_at) ORDER BY day
+                    WHERE created_at_utc >= NOW() - INTERVAL '30 days'
+                    GROUP BY DATE(created_at_utc) ORDER BY day
                     """, conn);
                 await using var r = await cmd.ExecuteReaderAsync();
                 while (await r.ReadAsync())
