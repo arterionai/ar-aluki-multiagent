@@ -102,7 +102,7 @@ public sealed class AdminFunctions
             {
                 await using var tenantCmd = new NpgsqlCommand("""
                     SELECT COUNT(DISTINCT tenant_id) FROM app.unified_message_artifact
-                    WHERE recorded_at >= NOW() - INTERVAL '30 days'
+                    WHERE created_at_utc >= NOW() - INTERVAL '30 days'
                     """, conn);
                 activeTenants = (long)(await tenantCmd.ExecuteScalarAsync() ?? 0L);
             }
@@ -146,7 +146,7 @@ public sealed class AdminFunctions
                     await using var fallbackCmd = new NpgsqlCommand("""
                         SELECT
                             COUNT(DISTINCT created_by_user_id)                                                              AS total_users,
-                            COUNT(DISTINCT created_by_user_id) FILTER (WHERE recorded_at >= CURRENT_DATE::timestamptz)  AS new_today
+                            COUNT(DISTINCT created_by_user_id) FILTER (WHERE created_at_utc >= CURRENT_DATE AT TIME ZONE 'UTC')  AS new_today
                         FROM app.unified_message_artifact
                         """, conn);
                     await using var r = await fallbackCmd.ExecuteReaderAsync();
