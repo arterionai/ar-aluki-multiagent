@@ -18,4 +18,4 @@ create index if not exists ix_ai_usage_log_feature_date on app.ai_usage_log (fea
 
 alter table app.ai_usage_log enable row level security;
 create policy ai_usage_log_tenant on app.ai_usage_log
-    using (tenant_id = app.current_tenant());
+    using (tenant_id = app.current_tenant_id());

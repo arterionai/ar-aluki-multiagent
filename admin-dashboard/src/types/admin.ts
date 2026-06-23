@@ -16,6 +16,7 @@ export interface DayTokenCost {
   day: string;
   tokens: number;
   cost: number;
+  [key: string]: string | number;
 }
 
 export interface FeatureCost {
