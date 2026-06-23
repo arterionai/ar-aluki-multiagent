@@ -8,8 +8,17 @@ using Npgsql;
 
 namespace Aluki.Runtime.Functions.Functions;
 
-public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logger)
+public sealed class AdminFunctions
 {
+    private readonly IConfiguration _config;
+    private readonly ILogger<AdminFunctions> _logger;
+
+    public AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logger)
+    {
+        _config = config;
+        _logger = logger;
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -18,8 +27,8 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
 
     private NpgsqlConnection OpenConnection()
     {
-        var connStr = config["Postgres:AppConnection"]
-                   ?? config["Postgres__AppConnection"]
+        var connStr = _config["Postgres:AppConnection"]
+                   ?? _config["Postgres__AppConnection"]
                    ?? throw new InvalidOperationException("Postgres connection string not configured.");
         var conn = new NpgsqlConnection(connStr);
         conn.Open();
@@ -54,7 +63,7 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
     public async Task<HttpResponseData> GetOverview(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/overview")] HttpRequestData req)
     {
-        if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, config))
+        if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, _config))
             return Unauthorized(req);
 
         try
@@ -119,7 +128,7 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error in AdminOverview");
+            _logger.LogError(ex, "Error in AdminOverview");
             var err = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
             err.WriteString("Internal server error");
             return err;
@@ -130,7 +139,7 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
     public async Task<HttpResponseData> GetAiCosts(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/ai-costs")] HttpRequestData req)
     {
-        if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, config))
+        if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, _config))
             return Unauthorized(req);
 
         try
@@ -190,7 +199,7 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error in AdminAiCosts");
+            _logger.LogError(ex, "Error in AdminAiCosts");
             var err = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
             err.WriteString("Internal server error");
             return err;
@@ -201,7 +210,7 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
     public async Task<HttpResponseData> GetTenants(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/tenants")] HttpRequestData req)
     {
-        if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, config))
+        if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, _config))
             return Unauthorized(req);
 
         try
@@ -256,7 +265,7 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error in AdminTenants");
+            _logger.LogError(ex, "Error in AdminTenants");
             var err = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
             err.WriteString("Internal server error");
             return err;
@@ -267,7 +276,7 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
     public async Task<HttpResponseData> GetWhatsApp(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/whatsapp")] HttpRequestData req)
     {
-        if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, config))
+        if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, _config))
             return Unauthorized(req);
 
         try
@@ -323,7 +332,7 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error in AdminWhatsApp");
+            _logger.LogError(ex, "Error in AdminWhatsApp");
             var err = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
             err.WriteString("Internal server error");
             return err;
@@ -334,7 +343,7 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
     public async Task<HttpResponseData> GetBilling(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/billing")] HttpRequestData req)
     {
-        if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, config))
+        if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, _config))
             return Unauthorized(req);
 
         try
@@ -392,7 +401,7 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error in AdminBilling");
+            _logger.LogError(ex, "Error in AdminBilling");
             var err = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
             err.WriteString("Internal server error");
             return err;
@@ -403,7 +412,7 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
     public async Task<HttpResponseData> GetSystem(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/system")] HttpRequestData req)
     {
-        if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, config))
+        if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, _config))
             return Unauthorized(req);
 
         try
@@ -463,7 +472,7 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error in AdminSystem");
+            _logger.LogError(ex, "Error in AdminSystem");
             var err = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
             err.WriteString("Internal server error");
             return err;
