@@ -1,0 +1,308 @@
+name: Backfill Denied Users
+
+# Queries App Insights for historically rejected WhatsApp senders (scope_denied /
+# MembershipNotFound before auto-provisioning), provisions any found senders, and
+# optionally sends them a welcome WhatsApp message so they enter the normal flow.
+#
+# Run manually from the Actions tab. Set dry_run=true to preview without writing to DB.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — log what would be done without writing to DB'
+        required: false
+        default: 'false'
+        type: string
+      lookback_days:
+        description: 'How many days back to scan App Insights (max 90)'
+        required: false
+        default: '90'
+        type: string
+      send_welcome:
+        description: 'Send a welcome WhatsApp message to newly provisioned users'
+        required: false
+        default: 'false'
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: ar-Aluki
+  KEYVAULT_NAME: kvaralukidev6155
+  POSTGRES_SERVER_NAME: pg-araluki-dev-6155
+  POSTGRES_SECRET_NAME: PostgresConnectionString
+  LOG_ANALYTICS_WORKSPACE_ID: 306438f9-1e1d-4a0c-a27f-4c1afdb77d9c
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql-client
+
+      - name: Query App Insights for denied senders
+        id: query_insights
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LOOKBACK="${{ github.event.inputs.lookback_days }}"
+          echo "Scanning App Insights for the last ${LOOKBACK} days..."
+
+          # Query 1: capture_unresolved_denial rows already persisted to Postgres
+          # (populated by migration 024 onwards — may be empty for historical data)
+          #
+          # Query 2: AppTraces containing "auto-provisioning" or "scope_denied" that
+          # include a sender phone number (E.164 pattern).
+          QUERY="AppTraces
+          | where TimeGenerated >= ago(${LOOKBACK}d)
+          | where Message has_any ('auto-provisioning', 'scope_denied', 'MembershipNotFound', 'PrincipalContextResolver')
+          | extend sender = extract(@'(?:sender=|Sender=|auto-provisioning new user )(\\+?[0-9]{7,15})', 1, Message)
+          | where isnotempty(sender)
+          | summarize first_seen=min(TimeGenerated), last_seen=max(TimeGenerated), occurrences=count() by sender
+          | order by occurrences desc"
+
+          RESULT=$(az monitor log-analytics query \
+            --workspace "$LOG_ANALYTICS_WORKSPACE_ID" \
+            --analytics-query "$QUERY" \
+            --output json 2>/dev/null || echo "[]")
+
+          echo "Raw query result:"
+          echo "$RESULT"
+
+          # Extract phone numbers (handle both array-of-tables and empty results)
+          SENDERS=$(echo "$RESULT" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          if isinstance(data, list):
+              rows = data
+          elif isinstance(data, dict) and 'tables' in data:
+              rows = data.get('tables', [{}])[0].get('rows', [])
+          else:
+              rows = []
+          phones = set()
+          for row in rows:
+              if isinstance(row, dict):
+                  s = row.get('sender', '')
+              elif isinstance(row, list) and len(row) > 0:
+                  s = row[0]
+              else:
+                  continue
+              if s:
+                  phones.add(s.strip())
+          print('\n'.join(sorted(phones)))
+          " 2>/dev/null || true)
+
+          if [ -z "$SENDERS" ]; then
+            echo "No denied senders found in App Insights."
+            echo "senders=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Found denied senders:"
+            echo "$SENDERS"
+            # Encode as space-separated for downstream step
+            SENDERS_ONE_LINE=$(echo "$SENDERS" | tr '\n' ' ' | sed 's/ $//')
+            echo "senders=$SENDERS_ONE_LINE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open database firewall for runner
+        if: steps.query_insights.outputs.senders != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER_IP="$(curl -s https://api.ipify.org)"
+          echo "Runner IP: $RUNNER_IP"
+          az postgres flexible-server firewall-rule create \
+            --resource-group "$RESOURCE_GROUP" \
+            --server-name "$POSTGRES_SERVER_NAME" \
+            --name "backfill-${{ github.run_id }}" \
+            --start-ip-address "$RUNNER_IP" \
+            --end-ip-address "$RUNNER_IP" \
+            --output none
+
+      - name: Also collect unresolved denials from capture_unresolved_denial table
+        if: steps.query_insights.outputs.senders != ''
+        id: db_denials
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CONN="$(az keyvault secret show --vault-name "$KEYVAULT_NAME" --name "$POSTGRES_SECRET_NAME" --query value -o tsv)"
+          echo "::add-mask::$CONN"
+
+          # Parse connection string
+          while IFS= read -r pair; do
+            [ -z "$pair" ] && continue
+            key="$(printf '%s' "${pair%%=*}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            val="$(printf '%s' "${pair#*=}" | sed 's/^[[:space:]]*//')"
+            case "$key" in
+              host|server) PGHOST="$val" ;;
+              port) PGPORT="$val" ;;
+              database|"database name"|db) PGDATABASE="$val" ;;
+              username|"user id"|user|uid) PGUSER="$val" ;;
+              password|pwd) PGPASSWORD="$val" ;;
+            esac
+          done <<< "${CONN//;/$'\n'}"
+          export PGHOST PGDATABASE PGUSER PGPASSWORD
+          export PGPORT="${PGPORT:-5432}"
+          export PGSSLMODE="require"
+          echo "::add-mask::$PGPASSWORD"
+
+          # Collect senders from capture_unresolved_denial (populated since migration 024)
+          DB_SENDERS=$(psql -tA -c \
+            "SELECT DISTINCT sender_external_id FROM capture_unresolved_denial ORDER BY 1;" \
+            2>/dev/null || echo "")
+          echo "DB unresolved denials: $DB_SENDERS"
+          echo "db_senders=$DB_SENDERS" >> "$GITHUB_OUTPUT"
+
+      - name: Provision denied senders
+        if: steps.query_insights.outputs.senders != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          DRY_RUN="${{ github.event.inputs.dry_run }}"
+
+          CONN="$(az keyvault secret show --vault-name "$KEYVAULT_NAME" --name "$POSTGRES_SECRET_NAME" --query value -o tsv)"
+          echo "::add-mask::$CONN"
+
+          while IFS= read -r pair; do
+            [ -z "$pair" ] && continue
+            key="$(printf '%s' "${pair%%=*}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            val="$(printf '%s' "${pair#*=}" | sed 's/^[[:space:]]*//')"
+            case "$key" in
+              host|server) PGHOST="$val" ;;
+              port) PGPORT="$val" ;;
+              database|"database name"|db) PGDATABASE="$val" ;;
+              username|"user id"|user|uid) PGUSER="$val" ;;
+              password|pwd) PGPASSWORD="$val" ;;
+            esac
+          done <<< "${CONN//;/$'\n'}"
+          export PGHOST PGDATABASE PGUSER PGPASSWORD
+          export PGPORT="${PGPORT:-5432}"
+          export PGSSLMODE="require"
+          echo "::add-mask::$PGPASSWORD"
+
+          # Merge senders from both App Insights and DB unresolved denials
+          ALL_SENDERS="${{ steps.query_insights.outputs.senders }} ${{ steps.db_denials.outputs.db_senders }}"
+
+          PROVISIONED=0
+          SKIPPED=0
+
+          for SENDER in $ALL_SENDERS; do
+            [ -z "$SENDER" ] && continue
+
+            echo "--- Processing sender: $SENDER ---"
+
+            # Check if already provisioned
+            EXISTING=$(psql -tA -c \
+              "SELECT u.id FROM users_profile u
+               WHERE (u.external_auth_id = '$SENDER' OR u.phone = '$SENDER')
+                 AND u.status = 'ACTIVE'
+               LIMIT 1;" 2>/dev/null || echo "")
+
+            if [ -n "$EXISTING" ]; then
+              echo "  Already provisioned (userId=$EXISTING) — skipping"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [DRY RUN] Would provision $SENDER"
+              PROVISIONED=$((PROVISIONED + 1))
+              continue
+            fi
+
+            # Provision: user_profile + INDIVIDUAL tenant + membership + DM context + context_access
+            psql -v ON_ERROR_STOP=1 -1 << EOSQL
+DO \$\$
+DECLARE
+  v_user_id   uuid;
+  v_tenant_id uuid;
+  v_ctx_id    uuid;
+BEGIN
+  -- 1. Upsert user_profile
+  INSERT INTO users_profile (id, external_auth_id, phone)
+  VALUES (gen_random_uuid(), '$SENDER', '$SENDER')
+  ON CONFLICT (external_auth_id) DO NOTHING;
+
+  SELECT id INTO v_user_id FROM users_profile
+  WHERE external_auth_id = '$SENDER' AND status = 'ACTIVE'
+  LIMIT 1;
+
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'user_profile not found after upsert for sender %', '$SENDER';
+  END IF;
+
+  -- 2. Check if already has INDIVIDUAL tenant
+  SELECT m.tenant_id INTO v_tenant_id
+  FROM memberships m
+  JOIN tenants t ON t.id = m.tenant_id
+  WHERE m.user_id = v_user_id AND m.status = 'ACTIVE' AND t.tenant_type = 'INDIVIDUAL'
+  LIMIT 1;
+
+  IF v_tenant_id IS NOT NULL THEN
+    RAISE NOTICE 'already has INDIVIDUAL tenant % for sender %', v_tenant_id, '$SENDER';
+    RETURN;
+  END IF;
+
+  -- 3. Create INDIVIDUAL tenant
+  INSERT INTO tenants (id, tenant_type, display_name)
+  VALUES (gen_random_uuid(), 'INDIVIDUAL', '$SENDER')
+  RETURNING id INTO v_tenant_id;
+
+  -- 4. Create membership (OWNER)
+  INSERT INTO memberships (tenant_id, user_id, role)
+  VALUES (v_tenant_id, v_user_id, 'OWNER')
+  ON CONFLICT (tenant_id, user_id) DO NOTHING;
+
+  -- 5. Create DM context
+  INSERT INTO contexts (id, tenant_id, context_type, external_context_id, title)
+  VALUES (gen_random_uuid(), v_tenant_id, 'DM', '$SENDER', 'Personal')
+  ON CONFLICT (tenant_id, context_type, external_context_id) DO NOTHING;
+
+  SELECT id INTO v_ctx_id FROM contexts
+  WHERE tenant_id = v_tenant_id AND context_type = 'DM' AND external_context_id = '$SENDER'
+  LIMIT 1;
+
+  -- 6. Grant context_access
+  INSERT INTO context_access (context_id, user_id, access_role)
+  VALUES (v_ctx_id, v_user_id, 'OWNER')
+  ON CONFLICT (context_id, user_id) DO NOTHING;
+
+  RAISE NOTICE 'provisioned sender=% userId=% tenantId=% contextId=%', '$SENDER', v_user_id, v_tenant_id, v_ctx_id;
+END;
+\$\$;
+EOSQL
+
+            echo "  Provisioned $SENDER"
+            PROVISIONED=$((PROVISIONED + 1))
+          done
+
+          echo ""
+          echo "=== Backfill summary ==="
+          echo "  Provisioned : $PROVISIONED"
+          echo "  Already existed (skipped) : $SKIPPED"
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "  (DRY RUN — no changes written)"
+          fi
+
+      - name: Remove database firewall rule
+        if: always() && steps.query_insights.outputs.senders != ''
+        shell: bash
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group "$RESOURCE_GROUP" \
+            --server-name "$POSTGRES_SERVER_NAME" \
+            --name "backfill-${{ github.run_id }}" \
+            --yes --output none || true

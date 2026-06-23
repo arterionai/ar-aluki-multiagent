@@ -133,7 +133,8 @@ public sealed class DbCaptureFixture : IAsyncLifetime
             "020_conversational_response.sql",
             "021_billing.sql",
             "022_calendar_oauth_tokens.sql",
-            "023_ai_usage_log.sql"
+            "023_ai_usage_log.sql",
+            "024_audit_sender_tracking.sql"
         };
 
         await using var connection = new NpgsqlConnection(connectionString);

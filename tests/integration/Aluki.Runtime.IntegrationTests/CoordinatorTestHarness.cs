@@ -3,10 +3,12 @@ using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Capture;
 using Aluki.Runtime.Capture.Dispatch;
 using Aluki.Runtime.Capture.Media;
+using Aluki.Runtime.Capture.Persistence;
 using Aluki.Runtime.Capture.Retry;
 using Aluki.Runtime.Capture.Skills;
 using Aluki.Runtime.Capture.Configuration;
 using Aluki.Runtime.Capture.Observability;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -50,7 +52,8 @@ internal static class CoordinatorTestHarness
         var telemetry = new CaptureTelemetry();
         var consent = new FakeConsentStopPolicy(consentStop);
 
-        var writeScopeDenied = new WriteScopeDeniedAuditSkill(factory, NullLogger<WriteScopeDeniedAuditSkill>.Instance);
+        var connFactory = new NpgsqlConnectionFactory(new ConfigurationBuilder().Build());
+        var writeScopeDenied = new WriteScopeDeniedAuditSkill(factory, connFactory, NullLogger<WriteScopeDeniedAuditSkill>.Instance);
         var writeRetry = new WriteRetryAuditSkill(factory, NullLogger<WriteRetryAuditSkill>.Instance);
 
         return new WhatsAppCaptureCoordinator(

@@ -77,4 +77,5 @@ public sealed record CaptureAuditEventRow(
     int? AttemptNumber,
     string? FailureCategory,
     string? PayloadRef,
-    DateTimeOffset OccurredAtUtc);
+    DateTimeOffset OccurredAtUtc,
+    string? SenderExternalId = null);

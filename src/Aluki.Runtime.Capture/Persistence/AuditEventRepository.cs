@@ -21,11 +21,11 @@ internal sealed class AuditEventRepository : IAuditEventRepository
             insert into capture_audit_event (
                 audit_id, tenant_id, context_id, user_id, source_channel, event_name,
                 event_status, correlation_id, provider_message_id, attempt_number,
-                failure_category, payload_ref, occurred_at_utc)
+                failure_category, payload_ref, occurred_at_utc, sender_external_id)
             values (
                 @audit_id, @tenant_id, @context_id, @user_id, @source_channel, @event_name,
                 @event_status, @correlation_id, @provider_message_id, @attempt_number,
-                @failure_category, @payload_ref, @occurred_at_utc)
+                @failure_category, @payload_ref, @occurred_at_utc, @sender_external_id)
             returning audit_id;
             """,
             _connection,
@@ -44,6 +44,7 @@ internal sealed class AuditEventRepository : IAuditEventRepository
         command.Parameters.AddWithValue("failure_category", (object?)row.FailureCategory ?? DBNull.Value);
         command.Parameters.AddWithValue("payload_ref", (object?)row.PayloadRef ?? DBNull.Value);
         command.Parameters.AddWithValue("occurred_at_utc", row.OccurredAtUtc);
+        command.Parameters.AddWithValue("sender_external_id", (object?)row.SenderExternalId ?? DBNull.Value);
 
         var result = await command.ExecuteScalarAsync(cancellationToken);
         return (Guid)result!;

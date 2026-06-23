@@ -121,7 +121,8 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
                 correlationId: correlationId,
                 providerMessageId: providerMessageId,
                 failureCategory: CaptureObservability.FailureCategory.ScopeDenied,
-                cancellationToken);
+                cancellationToken,
+                senderExternalId: envelope.Sender.ExternalUserId);
 
             return new CaptureOutcome(
                 CaptureOutcomeKind.ScopeDenied,
@@ -155,7 +156,8 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
                 correlationId,
                 providerMessageId,
                 CaptureObservability.FailureCategory.ConsentStop,
-                cancellationToken);
+                cancellationToken,
+                senderExternalId: envelope.Sender.ExternalUserId);
 
             return new CaptureOutcome(
                 CaptureOutcomeKind.ScopeDenied,
