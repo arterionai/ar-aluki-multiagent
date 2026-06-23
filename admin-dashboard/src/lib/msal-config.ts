@@ -18,10 +18,7 @@ export const msalConfig: Configuration = {
 };
 
 export const loginRequest = {
-  // Use standard OIDC scopes so no custom API scope setup is needed in
-  // the app registration. The ID token (aud = clientId) is always returned
-  // and is what we send to the backend.
-  scopes: ['openid', 'profile', 'email'],
+  scopes: [`api://${process.env.NEXT_PUBLIC_AAD_CLIENT_ID}/admin.read`],
 };
 
 export const apiConfig = {
