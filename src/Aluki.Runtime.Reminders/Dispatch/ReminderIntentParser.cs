@@ -17,7 +17,7 @@ public sealed record ReminderParseResult(
 /// </summary>
 public sealed class ReminderIntentParser
 {
-    private const string SystemPrompt =
+    private const string SystemPromptTemplate =
         """
         You are a reminder extraction assistant. Given a user message, extract two fields:
 
@@ -26,7 +26,7 @@ public sealed class ReminderIntentParser
         2. "scheduled_time_utc": The ISO 8601 UTC timestamp when to fire the reminder.
            Interpret relative expressions ("en 2 minutos", "en 1 hora", "mañana a las 3pm",
            "in 5 minutes") relative to the current UTC time provided in the user prompt.
-           Default local timezone for expressions without an explicit timezone: America/Mexico_City.
+           Default local timezone for expressions without an explicit timezone: {0}.
 
         Respond ONLY with a JSON object: {"reminder_text": "...", "scheduled_time_utc": "..."}
         If you cannot determine a clear future time, set "scheduled_time_utc" to null.
@@ -45,13 +45,15 @@ public sealed class ReminderIntentParser
     public async Task<ReminderParseResult> ParseAsync(
         string message,
         DateTimeOffset nowUtc,
+        string userTimezone,
         CancellationToken ct)
     {
+        var systemPrompt = string.Format(SystemPromptTemplate, userTimezone);
         var userPrompt = $"Current UTC time: {nowUtc:O}\n\nUser message: {message}";
 
         try
         {
-            var raw = await _router.CompleteAsync(SystemPrompt, userPrompt, ct);
+            var raw = await _router.CompleteAsync(systemPrompt, userPrompt, ct);
             if (string.IsNullOrWhiteSpace(raw))
                 return new ReminderParseResult(false, Error: "LLM returned empty response");
 

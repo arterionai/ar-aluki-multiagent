@@ -2,6 +2,8 @@ using System.Globalization;
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Capture.Channels.WhatsApp;
+using Aluki.Runtime.Memory;
+using Aluki.Runtime.Memory.Recall;
 using Microsoft.Extensions.Logging;
 
 namespace Aluki.Runtime.Reminders.Dispatch;
@@ -11,24 +13,30 @@ namespace Aluki.Runtime.Reminders.Dispatch;
 /// ahead of the catch-all ConversationalResponseAgent (priority 100) but after the
 /// CalendarDomainAgent (priority 50). Uses LLM intent parsing to extract the reminder
 /// content and time, then calls ReminderService.CreateAsync and confirms via WhatsApp.
+/// The user's timezone is resolved from personal memory (city recall) so confirmation
+/// messages display the correct local time.
 /// </summary>
 public sealed class ReminderDomainAgent : IDomainAgent
 {
     public const string Id = "reminders.whatsapp_scheduler";
+    private const string DefaultTimezone = "America/Mexico_City";
 
     private readonly ReminderService _reminderService;
     private readonly ReminderIntentParser _parser;
+    private readonly MemoryRecallService _recallService;
     private readonly IWhatsAppMessenger _messenger;
     private readonly ILogger<ReminderDomainAgent> _logger;
 
     public ReminderDomainAgent(
         ReminderService reminderService,
         ReminderIntentParser parser,
+        MemoryRecallService recallService,
         IWhatsAppMessenger messenger,
         ILogger<ReminderDomainAgent> logger)
     {
         _reminderService = reminderService;
         _parser = parser;
+        _recallService = recallService;
         _messenger = messenger;
         _logger = logger;
     }
@@ -53,7 +61,10 @@ public sealed class ReminderDomainAgent : IDomainAgent
         var correlationId = message.CorrelationId ?? message.MessageId;
         var text = message.Text ?? string.Empty;
 
-        var parsed = await _parser.ParseAsync(text, DateTimeOffset.UtcNow, ct);
+        // Resolve user's timezone from memory (best-effort — falls back to default).
+        var userTimezone = await ResolveUserTimezoneAsync(principal, correlationId, ct);
+
+        var parsed = await _parser.ParseAsync(text, DateTimeOffset.UtcNow, userTimezone, ct);
 
         if (!parsed.Success || parsed.ScheduledTimeUtc is null)
         {
@@ -76,7 +87,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
                 UserId: principal.UserId),
             ReminderText: parsed.ReminderText,
             ScheduledTimeUtc: parsed.ScheduledTimeUtc,
-            Timezone: "America/Mexico_City",
+            Timezone: userTimezone,
             ReminderType: ReminderType.OneShot,
             Recurrence: null,
             DeliveryChannel: deliveryChannel);
@@ -86,7 +97,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
         string reply;
         if (result.StatusCode is 200 or 201)
         {
-            reply = BuildConfirmation(parsed.ReminderText!, parsed.ScheduledTimeUtc!.Value);
+            reply = BuildConfirmation(parsed.ReminderText!, parsed.ScheduledTimeUtc!.Value, userTimezone);
         }
         else if (result.StatusCode == 409)
         {
@@ -107,11 +118,56 @@ public sealed class ReminderDomainAgent : IDomainAgent
             OutcomeCode: result.StatusCode is 200 or 201 ? "reminder_scheduled" : "reminder_failed");
     }
 
-    private static string BuildConfirmation(string reminderText, DateTimeOffset scheduledUtc)
+    private async Task<string> ResolveUserTimezoneAsync(
+        PrincipalContext principal,
+        string correlationId,
+        CancellationToken ct)
     {
         try
         {
-            var tz = TimeZoneInfo.FindSystemTimeZoneById("America/Mexico_City");
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
+
+            var scope = new PrincipalScope(
+                TenantId: principal.TenantId,
+                ContextId: principal.ContextId,
+                UserId: principal.UserId,
+                Roles: principal.Roles);
+
+            var outcome = await _recallService.RecallAsync(
+                scope,
+                "¿En qué ciudad o zona horaria vive este usuario?",
+                correlationId,
+                timeoutCts.Token);
+
+            if (outcome.Recall?.Claims is { Count: > 0 } claims)
+            {
+                var allText = string.Join(" ", claims.Select(c => c.Text));
+                var tz = CityTimezoneMapper.ResolveFromText(allText);
+                if (tz is not null)
+                {
+                    _logger.LogInformation(
+                        "ReminderDomainAgent: resolved timezone {Timezone} from memory. correlation_id={CorrelationId}",
+                        tz, correlationId);
+                    return tz;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex,
+                "ReminderDomainAgent: timezone recall failed, using default. correlation_id={CorrelationId}",
+                correlationId);
+        }
+
+        return DefaultTimezone;
+    }
+
+    private static string BuildConfirmation(string reminderText, DateTimeOffset scheduledUtc, string timezone)
+    {
+        try
+        {
+            var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
             var local = TimeZoneInfo.ConvertTime(scheduledUtc, tz);
             var formatted = local.ToString("HH:mm 'del' dddd d 'de' MMMM",
                 CultureInfo.GetCultureInfo("es-MX"));
