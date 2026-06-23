@@ -2,6 +2,7 @@ using Azure;
 using Azure.AI.OpenAI;
 using Microsoft.Extensions.Configuration;
 using OpenAI.Chat;
+using System.ClientModel.Primitives;
 
 namespace Aluki.Runtime.Memory.Chat;
 
@@ -16,6 +17,13 @@ public interface IChatModelRouter
 
 public sealed class FoundryChatModelRouter : IChatModelRouter
 {
+    // Shared HttpClient with bounded connection lifetime to prevent stale TCP connections
+    // from the pool causing TaskCanceledException on the first request after an idle period.
+    private static readonly HttpClient SharedHttpClient = new(new SocketsHttpHandler
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+    });
+
     private readonly string _deployment;
     private readonly Lazy<AzureOpenAIClient> _client;
 
@@ -28,7 +36,11 @@ public sealed class FoundryChatModelRouter : IChatModelRouter
                 ?? throw new InvalidOperationException("Foundry:Endpoint is not configured.");
             var apiKey = configuration["Foundry:ApiKey"]
                 ?? throw new InvalidOperationException("Foundry:ApiKey is not configured.");
-            return new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
+            var options = new AzureOpenAIClientOptions
+            {
+                Transport = new HttpClientPipelineTransport(SharedHttpClient)
+            };
+            return new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey), options);
         });
     }
 
