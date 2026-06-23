@@ -17,6 +17,12 @@ documented intended behaviors without explicit instruction.
 ## Delivery state (spec-kit `specs/00X-*`, strict order)
 
 - **SB-001 WhatsApp Capture** — done & deployed. Meta webhook → capture pipeline.
+  - **Auto-provisioning (new users)**: `PrincipalContextResolver` auto-provisions unknown
+    senders on first contact: atomically creates `tenants` (INDIVIDUAL) + `users_profile` +
+    `memberships` (OWNER) + `contexts` (DM) + `context_access` (OWNER) in one transaction
+    with `ON CONFLICT DO NOTHING` for idempotency. New users receive a response to their
+    first message with no manual registration. `ProvisionNewPrincipalAsync` in
+    `Aluki.Runtime.Capture/Security/PrincipalContextResolver.cs`.
 - **SB-002 Personal Memory & grounded recall** — done & deployed.
   - US1 note capture, US2 grounded semantic recall (pgvector + corroboration ≥2 +
     citations), US3 topic grouping + cross-channel continuity.
