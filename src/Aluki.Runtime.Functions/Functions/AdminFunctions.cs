@@ -50,15 +50,6 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
         return resp;
     }
 
-    [Function("AdminCorsOptions")]
-    public HttpResponseData HandleAdminOptions(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "admin/{*rest}")] HttpRequestData req)
-    {
-        var resp = req.CreateResponse(System.Net.HttpStatusCode.OK);
-        AddCorsHeaders(resp);
-        return resp;
-    }
-
     [Function("AdminOverview")]
     public async Task<HttpResponseData> GetOverview(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/overview")] HttpRequestData req)
