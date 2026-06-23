@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
-import { getCredentials } from '@/lib/auth';
+import { useMsal } from '@azure/msal-react';
+import { loginRequest, apiConfig } from '@/lib/msal-config';
 import type {
   OverviewData,
   AiCostsData,
@@ -12,41 +12,50 @@ import type {
   SystemData,
 } from '@/types/admin';
 
-async function fetchAdmin<T>(path: string, apiKey: string, apiUrl: string): Promise<T> {
-  const res = await fetch(`${apiUrl.replace(/\/$/, '')}/api/admin/${path}`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  if (res.status === 401) throw new Error('Unauthorized');
-  if (!res.ok) throw new Error(`Admin API error: ${res.status} ${res.statusText}`);
-  return res.json() as Promise<T>;
-}
-
 export function useAdminData<T>(
   path: string
 ): { data: T | null; loading: boolean; error: string | null; refresh: () => void } {
-  const router = useRouter();
+  const { instance, accounts } = useMsal();
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const creds = getCredentials();
-    if (!creds) { router.push('/login'); return; }
+    const account = accounts[0];
+    if (!account) {
+      await instance.loginRedirect(loginRequest);
+      return;
+    }
+
     setLoading(true);
     setError(null);
+
+    let accessToken: string;
     try {
-      const result = await fetchAdmin<T>(path, creds.apiKey, creds.apiUrl);
-      setData(result);
-    } catch (err) {
-      if (err instanceof Error && err.message === 'Unauthorized') {
-        router.push('/login');
-      } else {
-        setError(err instanceof Error ? err.message : 'Unknown error');
+      const result = await instance.acquireTokenSilent({ ...loginRequest, account });
+      accessToken = result.accessToken;
+    } catch {
+      try {
+        await instance.acquireTokenRedirect({ ...loginRequest, account });
+      } catch {
+        setError('No se pudo obtener el token de autenticación');
+        setLoading(false);
       }
+      return;
+    }
+
+    try {
+      const res = await fetch(`${apiConfig.baseUrl}/api/admin/${path}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!res.ok) throw new Error(`Admin API error: ${res.status} ${res.statusText}`);
+      setData(await res.json() as T);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
     }
-  }, [path, router]);
+  }, [path, instance, accounts]);
 
   useEffect(() => { load(); }, [load]);
 

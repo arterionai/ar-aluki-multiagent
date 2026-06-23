@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
+import { useMsal } from '@azure/msal-react';
 import { clsx } from 'clsx';
 import {
   LayoutDashboard,
@@ -13,7 +14,6 @@ import {
   Zap,
   LogOut,
 } from 'lucide-react';
-import { clearCredentials } from '@/lib/auth';
 
 const navItems = [
   { href: '/overview', label: 'Overview', icon: LayoutDashboard },
@@ -26,11 +26,10 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
+  const { instance } = useMsal();
 
   function handleLogout() {
-    clearCredentials();
-    router.push('/login');
+    instance.logoutRedirect({ postLogoutRedirectUri: '/' });
   }
 
   return (
