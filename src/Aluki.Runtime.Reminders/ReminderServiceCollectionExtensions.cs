@@ -1,6 +1,8 @@
+using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Capture.Persistence;
 using Aluki.Runtime.Reminders.Configuration;
 using Aluki.Runtime.Reminders.Delivery;
+using Aluki.Runtime.Reminders.Dispatch;
 using Aluki.Runtime.Reminders.Persistence;
 using Aluki.Runtime.Reminders.Security;
 using Microsoft.Extensions.Configuration;
@@ -16,12 +18,18 @@ public static class ReminderServiceCollectionExtensions
     {
         services.TryAddSingleton<NpgsqlConnectionFactory>();
 
-        // Default delivery channel until a real outbound channel is wired.
-        services.TryAddSingleton<IReminderDeliveryChannel, LoggingReminderDeliveryChannel>();
+        // WhatsApp delivery channel (routing encoded in delivery_channel by ReminderDomainAgent).
+        // Falls back to the logging stub only when WhatsApp messenger is unavailable.
+        services.TryAddSingleton<IReminderDeliveryChannel, WhatsAppReminderDeliveryChannel>();
 
         services.AddSingleton<ReminderScopeGuard>();
         services.AddSingleton<ReminderStore>();
         services.AddSingleton<ReminderService>();
+
+        // WhatsApp scheduling agent (priority 60).
+        services.AddSingleton<ReminderIntentParser>();
+        services.AddSingleton<ReminderDomainAgent>();
+        services.AddSingleton<IDomainAgent>(sp => sp.GetRequiredService<ReminderDomainAgent>());
 
         services.Configure<ReminderOptions>(configuration.GetSection(ReminderOptions.SectionName));
 
