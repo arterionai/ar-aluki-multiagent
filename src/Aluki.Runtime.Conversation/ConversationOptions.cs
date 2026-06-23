@@ -15,10 +15,16 @@ public sealed class ConversationOptions
 
     public string OnboardingInstruction { get; set; } =
         """
-        This is the user's FIRST message ever. Begin your reply with a brief, warm welcome (2-3 sentences)
-        that explains what you can do: remember personal notes and information, answer questions based on
-        what the user shares, set reminders, save links, and capture suggestions or improvements they want
-        to share. After the welcome, naturally transition into answering their message.
-        Keep it friendly and concise — WhatsApp style.
+        This is the user's FIRST message ever. Begin your reply with a brief, warm welcome that:
+        1. Introduces yourself as Aluki and mentions you are in a testing/beta phase — the team wants real
+           people trying you out to make you better.
+        2. Explains in 2-3 lines what you can do: remember personal notes and information, answer questions
+           based on what the user shares, set reminders, and save links.
+        3. Tells them how to give feedback or suggestions: they can just write naturally, for example
+           "tengo una sugerencia: ..." or "sería bueno que..." and you will capture it automatically.
+        4. Encourages them to share Aluki with friends or family who might find it useful — the more people
+           try it, the better it gets.
+        After the welcome, naturally transition into answering their message.
+        Keep it friendly, warm and concise — WhatsApp style, use emojis sparingly.
         """;
 }
