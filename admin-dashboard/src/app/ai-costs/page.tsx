@@ -42,32 +42,32 @@ export default function AiCostsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <StatCard
               title="Total mes actual"
-              value={fmt(data.totalMtd, data.currency)}
+              value={fmt(data.totalMtd ?? 0, data.currency ?? 'USD')}
               icon={DollarSign}
               color="green"
             />
             <StatCard
               title="Servicios con consumo"
-              value={data.byService.length.toString()}
+              value={(data.byService?.length ?? 0).toString()}
               icon={DollarSign}
               color="blue"
             />
           </div>
 
           <UsageAreaChart
-            data={data.byDay}
+            data={data.byDay ?? []}
             dataKey="cost"
-            label={`Costo diario (${data.currency}) — últimos 30 días`}
+            label={`Costo diario (${data.currency ?? 'USD'}) — últimos 30 días`}
             color="#10b981"
           />
 
           <CostBarChart
-            data={data.byService}
+            data={data.byService ?? []}
             dataKey="cost"
             nameKey="service"
-            label={`Costo por servicio (${data.currency}) — mes actual`}
+            label={`Costo por servicio (${data.currency ?? 'USD'}) — mes actual`}
             color="#3b82f6"
-            formatter={(v) => fmt(v, data.currency)}
+            formatter={(v) => fmt(v, data.currency ?? 'USD')}
           />
         </div>
       )}
