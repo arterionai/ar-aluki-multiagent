@@ -19,7 +19,13 @@ public sealed class ConversationPromptBuilder
         Keep your replies concise and conversational, as if chatting over WhatsApp.
         """;
 
-    public string BuildSystemPrompt() => SystemPromptTemplate;
+    public string BuildSystemPrompt(string? onboardingInstruction = null)
+    {
+        if (string.IsNullOrWhiteSpace(onboardingInstruction))
+            return SystemPromptTemplate;
+
+        return SystemPromptTemplate + "\n\n## Onboarding\n" + onboardingInstruction.Trim();
+    }
 
     public string BuildUserPrompt(
         string userMessage,
