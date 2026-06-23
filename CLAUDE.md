@@ -105,15 +105,26 @@ documented intended behaviors without explicit instruction.
   create/list/snooze/cancel + creation-time quota enforcement + lifecycle audit.
   **Scheduling = timer-sweep** (`ReminderSweepFunction`, every minute) not Durable
   Functions (follow-up); cross-tenant claim via `app.claim_due_reminders`
-  (SKIP LOCKED). **Delivery = pluggable `IReminderDeliveryChannel`** with a
-  logging/persisting stub (`LoggingReminderDeliveryChannel`) until a real outbound
-  channel exists. **Recurrence**: DST-safe `ReminderRecurrenceCalculator` (IANA tz,
-  local time held across DST, day-31→last-day, `until_date` end); the sweep re-arms
-  recurring reminders to the next occurrence after delivery. **Retry**: transient
-  failures retry with backoff (`ReminderRetryPolicy` 5s/25s/125s) up to 3 attempts,
-  then terminal `delivery_failed` (sub-minute backoff rounds to the sweep tick —
-  Durable-Functions follow-up). HTTP (Functions): `POST/GET api/reminders`,
-  `POST api/reminders/{id}/snooze`, `DELETE api/reminders/{id}`. Config `Reminders:*`.
+  (SKIP LOCKED). **Delivery = `WhatsAppReminderDeliveryChannel`** (real outbound
+  WhatsApp via `IWhatsAppMessenger`); routing is encoded in `delivery_channel` as
+  `whatsapp:{phoneNumberId}:{waId}` at creation time by `ReminderDomainAgent`.
+  `LoggingReminderDeliveryChannel` remains the fallback stub. **Recurrence**: DST-safe
+  `ReminderRecurrenceCalculator` (IANA tz, local time held across DST, day-31→last-day,
+  `until_date` end); the sweep re-arms recurring reminders to the next occurrence after
+  delivery. **Retry**: transient failures retry with backoff (`ReminderRetryPolicy`
+  5s/25s/125s) up to 3 attempts, then terminal `delivery_failed` (sub-minute backoff
+  rounds to the sweep tick — Durable-Functions follow-up). HTTP (Functions):
+  `POST/GET api/reminders`, `POST api/reminders/{id}/snooze`, `DELETE api/reminders/{id}`.
+  Config `Reminders:*`.
+  - **WhatsApp scheduling glue**: `ReminderDomainAgent` (`Aluki.Runtime.Reminders.Dispatch`,
+    `IDomainAgent` priority 60 — between CalendarDomainAgent 50 and ConversationalResponseAgent 100).
+    `ClaimsIntent` uses deterministic accent-insensitive `ReminderSchedulingDetector`
+    (es "recuérdame…/avisame…/ponme un recordatorio…" + en "remind me/set a reminder").
+    `HandleAsync` calls `ReminderIntentParser` (LLM via `IChatModelRouter`) to extract
+    `(reminder_text, scheduled_time_utc)` from natural language, then `ReminderService.CreateAsync`
+    with `delivery_channel=whatsapp:{phoneNumberId}:{waId}`, and confirms via WhatsApp.
+    When LLM cannot parse a clear time, agent asks for clarification (no reminder created).
+    Registered in `AddReminders` as `IDomainAgent`.
 - **SB-006 Delegated Reminders** — done (not yet deployed). Project
   `Aluki.Runtime.DelegatedReminders` (mirrors SB-005). Migration
   `012_delegated_reminders.sql` (delegated_reminders/delegated_recipient_contact/
@@ -325,3 +336,17 @@ Directive: ALL AI inference goes through Azure OpenAI or Azure AI Foundry.
 - Idempotent upsert: `INSERT … ON CONFLICT … RETURNING (xmax=0) AS is_new`.
 - Develop on the designated feature branch; merge to `main` only with explicit
   user permission (merging triggers the deploy).
+
+## Documentation mandate (REQUIRED for every new capability)
+
+Every new feature or behavior implemented in this repo MUST be documented in CLAUDE.md
+before the PR is merged to `main`. The documentation entry must include:
+1. The spec-kit identifier (SB-NNN or equivalent) and current delivery state.
+2. The project/namespace, migration file(s), and key types/interfaces introduced.
+3. Architectural decisions that affect how future work integrates with the feature
+   (dispatch priority, config keys, routing conventions, delivery patterns, etc.).
+4. HTTP endpoints if any (Functions), and Config section name.
+
+This file is the persistent project memory. Undocumented functionality will be
+re-implemented or broken by future sessions that lack the context. If you build
+it, document it here.
