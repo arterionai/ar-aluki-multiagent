@@ -209,9 +209,9 @@ public sealed class AdminFunctions
             // Daily costs — last 30 days
             var from = DateTimeOffset.UtcNow.AddDays(-30).ToString("yyyy-MM-dd");
             var to   = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd");
-            var dailyPayload = $$"""
-                {"type":"ActualCost","timeframe":"Custom","timePeriod":{"from":"{{from}}","to":"{{to}}"},"dataset":{"granularity":"Daily","aggregation":{"totalCost":{"name":"Cost","function":"Sum"}}}}
-                """;
+            var dailyPayload = """
+                {"type":"ActualCost","timeframe":"Custom","timePeriod":{"from":"FROM_DATE","to":"TO_DATE"},"dataset":{"granularity":"Daily","aggregation":{"totalCost":{"name":"Cost","function":"Sum"}}}}
+                """.Replace("FROM_DATE", from).Replace("TO_DATE", to);
 
             var byDay = new List<object>();
             var currency = "USD";
