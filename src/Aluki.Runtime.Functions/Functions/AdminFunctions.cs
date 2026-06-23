@@ -102,7 +102,7 @@ public sealed class AdminFunctions
             {
                 await using var tenantCmd = new NpgsqlCommand("""
                     SELECT COUNT(DISTINCT tenant_id) FROM app.unified_message_artifact
-                    WHERE recorded_at >= NOW() - INTERVAL '30 days'
+                    WHERE created_at_utc >= NOW() - INTERVAL '30 days'
                     """, conn);
                 activeTenants = (long)(await tenantCmd.ExecuteScalarAsync() ?? 0L);
             }
@@ -120,6 +120,46 @@ public sealed class AdminFunctions
             }
             catch (PostgresException ex) when (ex.SqlState == "42P01") { }
 
+            // Total distinct users (unique phones) and new users today
+            long totalUsers = 0;
+            long newUsersToday = 0;
+            try
+            {
+                await using var usersCmd = new NpgsqlCommand("""
+                    SELECT
+                        COUNT(DISTINCT u.id)                                                         AS total_users,
+                        COUNT(DISTINCT u.id) FILTER (WHERE u.created_at >= CURRENT_DATE::timestamptz) AS new_today
+                    FROM app.users_profile u
+                    WHERE u.phone IS NOT NULL
+                    """, conn);
+                await using var usersReader = await usersCmd.ExecuteReaderAsync();
+                if (await usersReader.ReadAsync())
+                {
+                    totalUsers    = usersReader.GetInt64(0);
+                    newUsersToday = usersReader.GetInt64(1);
+                }
+            }
+            catch (PostgresException ex) when (ex.SqlState == "42P01")
+            {
+                // Fall back to distinct senders in message table if users_profile not available
+                try
+                {
+                    await using var fallbackCmd = new NpgsqlCommand("""
+                        SELECT
+                            COUNT(DISTINCT created_by_user_id)                                                              AS total_users,
+                            COUNT(DISTINCT created_by_user_id) FILTER (WHERE created_at_utc >= CURRENT_DATE::timestamptz)  AS new_today
+                        FROM app.unified_message_artifact
+                        """, conn);
+                    await using var r = await fallbackCmd.ExecuteReaderAsync();
+                    if (await r.ReadAsync())
+                    {
+                        totalUsers    = r.GetInt64(0);
+                        newUsersToday = r.GetInt64(1);
+                    }
+                }
+                catch (PostgresException) { }
+            }
+
             return JsonOk(req, new
             {
                 messages24h,
@@ -127,6 +167,8 @@ public sealed class AdminFunctions
                 messages30d,
                 activeTenants,
                 outboundMessages,
+                totalUsers,
+                newUsersToday,
                 generatedAt = DateTimeOffset.UtcNow
             });
         }

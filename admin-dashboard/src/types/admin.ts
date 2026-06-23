@@ -4,6 +4,8 @@ export interface OverviewData {
   messages30d: number;
   activeTenants: number;
   outboundMessages: number;
+  totalUsers: number;
+  newUsersToday: number;
   generatedAt: string;
 }
 
