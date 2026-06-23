@@ -13,31 +13,24 @@ export interface DayCount {
   [key: string]: string | number;
 }
 
-export interface DayTokenCost {
+export interface DayCost {
   day: string;
-  tokens: number;
   cost: number;
   [key: string]: string | number;
 }
 
-export interface FeatureCost {
-  feature: string;
-  tokens: number;
-  cost: number;
-  [key: string]: string | number;
-}
-
-export interface TenantCost {
-  tenantId: string;
-  tokens: number;
+export interface ServiceCost {
+  service: string;
   cost: number;
   [key: string]: string | number;
 }
 
 export interface AiCostsData {
-  byDay: DayTokenCost[];
-  byFeature: FeatureCost[];
-  topTenants: TenantCost[];
+  byDay: DayCost[];
+  byService: ServiceCost[];
+  totalMtd: number;
+  currency: string;
+  managedIdentityUnavailable?: boolean;
   generatedAt: string;
 }
 

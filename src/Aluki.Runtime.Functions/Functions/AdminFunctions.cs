@@ -1,3 +1,5 @@
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using Aluki.Runtime.Functions.Admin;
 using Microsoft.Azure.Functions.Worker;
@@ -12,11 +14,13 @@ public sealed class AdminFunctions
 {
     private readonly IConfiguration _config;
     private readonly ILogger<AdminFunctions> _logger;
+    private readonly IHttpClientFactory _httpFactory;
 
-    public AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logger)
+    public AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logger, IHttpClientFactory httpFactory)
     {
         _config = config;
         _logger = logger;
+        _httpFactory = httpFactory;
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -144,58 +148,89 @@ public sealed class AdminFunctions
 
         try
         {
-            await using var conn = OpenConnection();
+            var subscriptionId    = _config["Admin:SubscriptionId"]    ?? "33bbf1e1-134d-42e3-a370-0dfb1da16cff";
+            var resourceGroupName = _config["Admin:ResourceGroupName"] ?? "ar-Aluki";
+            var token = await GetAzureManagementTokenAsync();
+
+            if (token == null)
+            {
+                _logger.LogWarning("AdminAiCosts: managed identity token unavailable");
+                return JsonOk(req, new { byDay = Array.Empty<object>(), byService = Array.Empty<object>(), totalMtd = 0m, currency = "USD", managedIdentityUnavailable = true, generatedAt = DateTimeOffset.UtcNow });
+            }
+
+            using var client = _httpFactory.CreateClient();
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            // Scoped to the resource group so only costs for this app are returned.
+            var queryUrl = $"https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.CostManagement/query?api-version=2023-11-01";
+
+            // Daily costs — last 30 days
+            var from = DateTimeOffset.UtcNow.AddDays(-30).ToString("yyyy-MM-dd");
+            var to   = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd");
+            var dailyPayload = $$"""
+                {"type":"ActualCost","timeframe":"Custom","timePeriod":{"from":"{{from}}","to":"{{to}}"},"dataset":{"granularity":"Daily","aggregation":{"totalCost":{"name":"Cost","function":"Sum"}}}}
+                """;
 
             var byDay = new List<object>();
-            var byFeature = new List<object>();
-            var topTenants = new List<object>();
+            var currency = "USD";
 
-            try
+            var dailyResp = await client.PostAsync(queryUrl, new StringContent(dailyPayload, Encoding.UTF8, "application/json"));
+            if (dailyResp.IsSuccessStatusCode)
             {
-                await using var dayCmd = new NpgsqlCommand("""
-                    SELECT DATE(recorded_at) AS day,
-                           SUM(total_tokens) AS tokens,
-                           SUM(cost_usd) AS cost
-                    FROM app.ai_usage_log
-                    WHERE recorded_at >= NOW() - INTERVAL '30 days'
-                    GROUP BY DATE(recorded_at)
-                    ORDER BY day
-                    """, conn);
-                await using var dayReader = await dayCmd.ExecuteReaderAsync();
-                while (await dayReader.ReadAsync())
-                    byDay.Add(new { day = dayReader.GetDateTime(0).ToString("yyyy-MM-dd"), tokens = dayReader.GetInt64(1), cost = dayReader.GetDecimal(2) });
-            }
-            catch (PostgresException ex) when (ex.SqlState == "42P01") { }
+                using var dailyDoc = JsonDocument.Parse(await dailyResp.Content.ReadAsStringAsync());
+                var props = dailyDoc.RootElement.GetProperty("properties");
+                var cols  = props.GetProperty("columns").EnumerateArray().Select((c, i) => (name: c.GetProperty("name").GetString()!, idx: i)).ToList();
+                var costIdx = cols.First(c => c.name == "Cost").idx;
+                var dateIdx = cols.First(c => c.name == "UsageDate").idx;
+                var currIdx = cols.FirstOrDefault(c => c.name == "Currency").idx;
 
-            try
+                foreach (var row in props.GetProperty("rows").EnumerateArray())
+                {
+                    var rawDate = row[dateIdx].GetInt64().ToString();
+                    var day = $"{rawDate[..4]}-{rawDate[4..6]}-{rawDate[6..8]}";
+                    var cost = row[costIdx].GetDecimal();
+                    if (currIdx >= 0) currency = row[currIdx].GetString() ?? currency;
+                    byDay.Add(new { day, cost });
+                }
+            }
+            else
             {
-                await using var featCmd = new NpgsqlCommand("""
-                    SELECT feature, SUM(total_tokens) AS tokens, SUM(cost_usd) AS cost
-                    FROM app.ai_usage_log
-                    WHERE recorded_at >= NOW() - INTERVAL '30 days'
-                    GROUP BY feature ORDER BY cost DESC
-                    """, conn);
-                await using var featReader = await featCmd.ExecuteReaderAsync();
-                while (await featReader.ReadAsync())
-                    byFeature.Add(new { feature = featReader.GetString(0), tokens = featReader.GetInt64(1), cost = featReader.GetDecimal(2) });
+                _logger.LogWarning("AdminAiCosts: daily cost query failed {Status}", dailyResp.StatusCode);
             }
-            catch (PostgresException ex) when (ex.SqlState == "42P01") { }
 
-            try
+            // By-service costs — month-to-date
+            var servicePayload = """
+                {"type":"ActualCost","timeframe":"MonthToDate","dataset":{"granularity":"None","aggregation":{"totalCost":{"name":"Cost","function":"Sum"}},"grouping":[{"type":"Dimension","name":"ServiceName"}]}}
+                """;
+
+            var byService = new List<object>();
+            decimal totalMtd = 0m;
+
+            var serviceResp = await client.PostAsync(queryUrl, new StringContent(servicePayload, Encoding.UTF8, "application/json"));
+            if (serviceResp.IsSuccessStatusCode)
             {
-                await using var tenCmd = new NpgsqlCommand("""
-                    SELECT tenant_id, SUM(total_tokens) AS tokens, SUM(cost_usd) AS cost
-                    FROM app.ai_usage_log
-                    WHERE recorded_at >= NOW() - INTERVAL '30 days'
-                    GROUP BY tenant_id ORDER BY cost DESC LIMIT 10
-                    """, conn);
-                await using var tenReader = await tenCmd.ExecuteReaderAsync();
-                while (await tenReader.ReadAsync())
-                    topTenants.Add(new { tenantId = tenReader.GetGuid(0), tokens = tenReader.GetInt64(1), cost = tenReader.GetDecimal(2) });
-            }
-            catch (PostgresException ex) when (ex.SqlState == "42P01") { }
+                using var svcDoc = JsonDocument.Parse(await serviceResp.Content.ReadAsStringAsync());
+                var props   = svcDoc.RootElement.GetProperty("properties");
+                var cols    = props.GetProperty("columns").EnumerateArray().Select((c, i) => (name: c.GetProperty("name").GetString()!, idx: i)).ToList();
+                var costIdx = cols.First(c => c.name == "Cost").idx;
+                var nameIdx = cols.First(c => c.name == "ServiceName").idx;
 
-            return JsonOk(req, new { byDay, byFeature, topTenants, generatedAt = DateTimeOffset.UtcNow });
+                foreach (var row in props.GetProperty("rows").EnumerateArray())
+                {
+                    var svc  = row[nameIdx].GetString() ?? "Unknown";
+                    var cost = row[costIdx].GetDecimal();
+                    totalMtd += cost;
+                    byService.Add(new { service = svc, cost });
+                }
+
+                byService = byService.OrderByDescending(o => ((dynamic)o).cost).ToList<object>();
+            }
+            else
+            {
+                _logger.LogWarning("AdminAiCosts: service cost query failed {Status}", serviceResp.StatusCode);
+            }
+
+            return JsonOk(req, new { byDay, byService, totalMtd, currency, generatedAt = DateTimeOffset.UtcNow });
         }
         catch (Exception ex)
         {
@@ -203,6 +238,29 @@ public sealed class AdminFunctions
             var err = req.CreateResponse(System.Net.HttpStatusCode.InternalServerError);
             err.WriteString("Internal server error");
             return err;
+        }
+    }
+
+    private async Task<string?> GetAzureManagementTokenAsync()
+    {
+        var endpoint = Environment.GetEnvironmentVariable("IDENTITY_ENDPOINT");
+        var identityHeader = Environment.GetEnvironmentVariable("IDENTITY_HEADER");
+        if (string.IsNullOrEmpty(endpoint) || string.IsNullOrEmpty(identityHeader)) return null;
+
+        try
+        {
+            using var client = _httpFactory.CreateClient();
+            client.DefaultRequestHeaders.Add("X-IDENTITY-HEADER", identityHeader);
+            var url = $"{endpoint}?api-version=2019-08-01&resource=https%3A%2F%2Fmanagement.azure.com%2F";
+            var resp = await client.GetAsync(url);
+            if (!resp.IsSuccessStatusCode) return null;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return doc.RootElement.GetProperty("access_token").GetString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AdminFunctions: MSI token fetch failed");
+            return null;
         }
     }
 

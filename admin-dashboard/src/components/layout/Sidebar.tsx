@@ -17,7 +17,7 @@ import {
 
 const navItems = [
   { href: '/overview', label: 'Overview', icon: LayoutDashboard },
-  { href: '/ai-costs', label: 'AI Costs', icon: Cpu },
+  { href: '/ai-costs', label: 'Platform Costs', icon: Cpu },
   { href: '/tenants', label: 'Tenants', icon: Users },
   { href: '/whatsapp', label: 'WhatsApp', icon: MessageSquare },
   { href: '/billing', label: 'Billing', icon: CreditCard },
