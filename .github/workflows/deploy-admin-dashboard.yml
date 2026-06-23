@@ -32,7 +32,7 @@ jobs:
           action: 'upload'
           app_location: '/admin-dashboard'
           output_location: '.next'
-          app_build_command: 'npm ci && npm run build'
+          app_build_command: 'npm ci --legacy-peer-deps && npm run build'
         env:
           NEXT_PUBLIC_API_BASE_URL: https://func-araluki-dev-6155.azurewebsites.net
           NEXT_PUBLIC_AAD_TENANT_ID: 7b1683c8-3607-4002-a544-89f96fa0ef3a
