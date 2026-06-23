@@ -11,7 +11,7 @@ public static class ReminderSchedulingDetector
 {
     private static readonly string[] Triggers =
     [
-        // Spanish
+        // Spanish — imperative
         "recuerdame",
         "avisame",
         "ponme un recordatorio", "pon un recordatorio", "pon recordatorio",
@@ -19,9 +19,14 @@ public static class ReminderSchedulingDetector
         "agenda un recordatorio", "programame un recordatorio",
         "mandame un recordatorio", "mandame recordatorio",
         "no olvides recordarme", "que no se me olvide",
+        // Spanish — polite/interrogative forms ("puedes recordarme", "me recuerdes", etc.)
+        "puedes recordarme", "podrias recordarme", "me puedes recordar",
+        "me recuerdes", "me recuerdas",
+        "recordarme que", "recordarme de",
         // English
         "remind me", "set a reminder", "set reminder",
         "create a reminder", "add a reminder", "create reminder",
+        "can you remind me", "could you remind me",
     ];
 
     public static bool LooksLikeReminder(string? text)

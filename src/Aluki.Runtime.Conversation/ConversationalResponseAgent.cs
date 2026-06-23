@@ -187,12 +187,13 @@ public sealed class ConversationalResponseAgent : IDomainAgent
                 "ConversationalResponseAgent failed. message_id={MessageId} correlation_id={CorrelationId}",
                 message.MessageId, correlationId);
 
-            // Graceful degradation: send a friendly error message.
+            // Graceful degradation: use CancellationToken.None so the fallback send
+            // is never skipped even when the LLM timeout fired and cancelled timeoutCts.
             await SendResponseAsync(
                 phoneNumberId, recipientWaId,
                 _options.ErrorFallbackMessage, OutboundStatus.ErrorFallback,
                 errorReason: ex.Message,
-                principal, correlationId, ct);
+                principal, correlationId, CancellationToken.None);
 
             return new AgentHandleResult(false, ErrorCode: "response_failed", ErrorMessage: ex.Message);
         }
