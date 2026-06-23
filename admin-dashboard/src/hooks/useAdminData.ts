@@ -34,7 +34,9 @@ export function useAdminData<T>(
     let accessToken: string;
     try {
       const result = await instance.acquireTokenSilent({ ...loginRequest, account });
-      accessToken = result.accessToken;
+      // Use the ID token (aud=clientId) — always present with OIDC scopes
+      // and requires no custom API scope setup in the app registration.
+      accessToken = result.idToken;
     } catch {
       try {
         await instance.acquireTokenRedirect({ ...loginRequest, account });

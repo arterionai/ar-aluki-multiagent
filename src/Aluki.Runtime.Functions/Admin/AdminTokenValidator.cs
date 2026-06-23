@@ -41,7 +41,8 @@ public static class AdminTokenValidator
             ValidateIssuer = true,
             ValidIssuer = $"https://login.microsoftonline.com/{tenantId}/v2.0",
             ValidateAudience = true,
-            ValidAudience = $"api://{clientId}",
+            // Accept both ID tokens (aud=clientId) and access tokens (aud=api://clientId).
+            ValidAudiences = new[] { clientId, $"api://{clientId}" },
             ValidateLifetime = true,
             IssuerSigningKeys = oidcConfig.SigningKeys,
             ValidateIssuerSigningKey = true,
