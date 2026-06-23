@@ -1,0 +1,122 @@
+name: Diagnose WhatsApp UX (Read + Typing)
+
+on:
+  workflow_dispatch:
+    inputs:
+      lookback_hours:
+        description: Horas hacia atrás a revisar
+        required: false
+        default: "6"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  WORKSPACE_ID: 306438f9-1e1d-4a0c-a27f-4c1afdb77d9c
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Query — Read/Typing errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo "=== Errores en MarkReadAndShowTyping (últimas ${HOURS}h) ==="
+          az monitor log-analytics query \
+            --workspace "$WORKSPACE_ID" \
+            --analytics-query "
+              AppTraces
+              | where TimeGenerated >= ago(${HOURS}h)
+              | where Message has_any ('read/typing', 'MarkRead', 'typing indicator', 'Failed to send read')
+              | project TimeGenerated, SeverityLevel, Message, Properties
+              | order by TimeGenerated desc
+              | take 50
+            " \
+            --output table || true
+
+      - name: Query — Inbound webhook activity
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo ""
+          echo "=== Mensajes WhatsApp recibidos (últimas ${HOURS}h) ==="
+          az monitor log-analytics query \
+            --workspace "$WORKSPACE_ID" \
+            --analytics-query "
+              AppTraces
+              | where TimeGenerated >= ago(${HOURS}h)
+              | where Message has 'Meta inbound captured'
+              | project TimeGenerated, Message, Properties
+              | order by TimeGenerated desc
+              | take 30
+            " \
+            --output table || true
+
+      - name: Query — Errores de envío de respuesta (SendTextMessage)
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo ""
+          echo "=== Errores al enviar mensajes salientes (últimas ${HOURS}h) ==="
+          az monitor log-analytics query \
+            --workspace "$WORKSPACE_ID" \
+            --analytics-query "
+              AppTraces
+              | where TimeGenerated >= ago(${HOURS}h)
+              | where SeverityLevel >= 3
+              | where Message has_any ('SendTextMessage', 'WhatsApp response', 'response_failed', 'ErrorFallback', 'messenger', 'send')
+              | project TimeGenerated, SeverityLevel, Message, Properties
+              | order by TimeGenerated desc
+              | take 50
+            " \
+            --output table || true
+
+      - name: Query — Fallos del agente conversacional
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo ""
+          echo "=== Fallos ConversationalResponseAgent (últimas ${HOURS}h) ==="
+          az monitor log-analytics query \
+            --workspace "$WORKSPACE_ID" \
+            --analytics-query "
+              AppTraces
+              | where TimeGenerated >= ago(${HOURS}h)
+              | where SeverityLevel >= 2
+              | where Message has_any ('ConversationalResponseAgent', 'response_failed', 'LLM', 'CompleteAsync', 'timeout', 'contained')
+              | project TimeGenerated, SeverityLevel, Message, Properties
+              | order by TimeGenerated desc
+              | take 50
+            " \
+            --output table || true
+
+      - name: Query — Resumen de excepciones
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo ""
+          echo "=== Excepciones no manejadas (últimas ${HOURS}h) ==="
+          az monitor log-analytics query \
+            --workspace "$WORKSPACE_ID" \
+            --analytics-query "
+              AppExceptions
+              | where TimeGenerated >= ago(${HOURS}h)
+              | project TimeGenerated, ExceptionType, InnermostMessage, OuterMessage, Assembly
+              | order by TimeGenerated desc
+              | take 30
+            " \
+            --output table || true
