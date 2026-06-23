@@ -23,12 +23,14 @@ export interface FeatureCost {
   feature: string;
   tokens: number;
   cost: number;
+  [key: string]: string | number;
 }
 
 export interface TenantCost {
   tenantId: string;
   tokens: number;
   cost: number;
+  [key: string]: string | number;
 }
 
 export interface AiCostsData {
