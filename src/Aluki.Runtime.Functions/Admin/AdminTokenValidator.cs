@@ -51,7 +51,14 @@ public static class AdminTokenValidator
         var validationParams = new TokenValidationParameters
         {
             ValidateIssuer = true,
-            ValidIssuer = $"https://login.microsoftonline.com/{tenantId}/v2.0",
+            // Accept both v1 (sts.windows.net) and v2 (login.microsoftonline.com) issuers —
+            // access tokens for custom API scopes (api://...) are issued by the v1 endpoint
+            // even when acquired via MSAL with v2 authority.
+            ValidIssuers = new[]
+            {
+                $"https://login.microsoftonline.com/{tenantId}/v2.0",
+                $"https://sts.windows.net/{tenantId}/",
+            },
             ValidateAudience = true,
             // Accept both ID tokens (aud=clientId) and access tokens (aud=api://clientId).
             ValidAudiences = new[] { clientId, $"api://{clientId}" },
