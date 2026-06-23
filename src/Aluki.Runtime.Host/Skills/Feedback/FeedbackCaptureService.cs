@@ -58,7 +58,14 @@ public sealed class FeedbackCaptureService
         return lower.Contains("suggestion") || lower.Contains("suggest") ||
                lower.Contains("idea") || lower.Contains("feature request") ||
                lower.Contains("feedback") || lower.Contains("would be nice") ||
-               lower.Contains("could you add") || lower.Contains("please add");
+               lower.Contains("could you add") || lower.Contains("please add") ||
+               // Spanish
+               lower.Contains("recomendaci") || lower.Contains("recomiendo") || lower.Contains("recomendaría") ||
+               lower.Contains("sugerencia") || lower.Contains("sugiero") || lower.Contains("sugerir") ||
+               lower.Contains("sería bueno") || lower.Contains("estaría bien") || lower.Contains("me gustaría que") ||
+               lower.Contains("podrías agregar") || lower.Contains("podrías añadir") || lower.Contains("podrías incluir") ||
+               lower.Contains("quiero proponer") || lower.Contains("tengo una propuesta") ||
+               lower.Contains("solicitud") || lower.Contains("mejora");
     }
 
     private static string ComputePayloadHash(string text)
