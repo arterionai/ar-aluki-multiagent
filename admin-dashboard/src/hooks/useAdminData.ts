@@ -1,43 +1,61 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { apiConfig } from '@/lib/msal-config';
-import { adminApi } from '@/lib/api-client';
+import { useRouter } from 'next/navigation';
+import { getCredentials } from '@/lib/auth';
+import type {
+  OverviewData,
+  AiCostsData,
+  TenantsData,
+  WhatsAppData,
+  BillingData,
+  SystemData,
+} from '@/types/admin';
 
-function getToken(): string {
-  // MVP: use the static API key from env
-  return apiConfig.adminApiKey;
+async function fetchAdmin<T>(path: string, apiKey: string, apiUrl: string): Promise<T> {
+  const res = await fetch(`${apiUrl.replace(/\/$/, '')}/api/admin/${path}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (res.status === 401) throw new Error('Unauthorized');
+  if (!res.ok) throw new Error(`Admin API error: ${res.status} ${res.statusText}`);
+  return res.json() as Promise<T>;
 }
 
 export function useAdminData<T>(
-  fetcher: (token: string) => Promise<T>
+  path: string
 ): { data: T | null; loading: boolean; error: string | null; refresh: () => void } {
+  const router = useRouter();
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    const creds = getCredentials();
+    if (!creds) { router.push('/login'); return; }
     setLoading(true);
     setError(null);
     try {
-      const token = getToken();
-      const result = await fetcher(token);
+      const result = await fetchAdmin<T>(path, creds.apiKey, creds.apiUrl);
       setData(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      if (err instanceof Error && err.message === 'Unauthorized') {
+        router.push('/login');
+      } else {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+      }
     } finally {
       setLoading(false);
     }
-  }, [fetcher]);
+  }, [path, router]);
 
   useEffect(() => { load(); }, [load]);
 
   return { data, loading, error, refresh: load };
 }
 
-export const useOverviewData = () => useAdminData(adminApi.overview);
-export const useAiCostsData = () => useAdminData(adminApi.aiCosts);
-export const useTenantsData = () => useAdminData(adminApi.tenants);
-export const useWhatsAppData = () => useAdminData(adminApi.whatsapp);
-export const useBillingData = () => useAdminData(adminApi.billing);
-export const useSystemData = () => useAdminData(adminApi.system);
+export const useOverviewData = () => useAdminData<OverviewData>('overview');
+export const useAiCostsData = () => useAdminData<AiCostsData>('ai-costs');
+export const useTenantsData = () => useAdminData<TenantsData>('tenants');
+export const useWhatsAppData = () => useAdminData<WhatsAppData>('whatsapp');
+export const useBillingData = () => useAdminData<BillingData>('billing');
+export const useSystemData = () => useAdminData<SystemData>('system');

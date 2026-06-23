@@ -26,9 +26,17 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
         return conn;
     }
 
+    private static void AddCorsHeaders(HttpResponseData resp)
+    {
+        resp.Headers.TryAddWithoutValidation("Access-Control-Allow-Origin", "*");
+        resp.Headers.TryAddWithoutValidation("Access-Control-Allow-Methods", "GET, OPTIONS");
+        resp.Headers.TryAddWithoutValidation("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    }
+
     private static HttpResponseData Unauthorized(HttpRequestData req)
     {
         var resp = req.CreateResponse(System.Net.HttpStatusCode.Unauthorized);
+        AddCorsHeaders(resp);
         resp.WriteString("Unauthorized");
         return resp;
     }
@@ -36,8 +44,18 @@ public class AdminFunctions(IConfiguration config, ILogger<AdminFunctions> logge
     private static HttpResponseData JsonOk(HttpRequestData req, object data)
     {
         var resp = req.CreateResponse(System.Net.HttpStatusCode.OK);
+        AddCorsHeaders(resp);
         resp.Headers.Add("Content-Type", "application/json; charset=utf-8");
         resp.WriteString(JsonSerializer.Serialize(data, JsonOptions));
+        return resp;
+    }
+
+    [Function("AdminCorsOptions")]
+    public HttpResponseData HandleAdminOptions(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "options", Route = "admin/{*rest}")] HttpRequestData req)
+    {
+        var resp = req.CreateResponse(System.Net.HttpStatusCode.OK);
+        AddCorsHeaders(resp);
         return resp;
     }
 
