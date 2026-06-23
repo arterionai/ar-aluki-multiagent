@@ -1,0 +1,97 @@
+name: DB Query Users
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: ar-Aluki
+  KEYVAULT_NAME: kvaralukidev6155
+  POSTGRES_SERVER_NAME: pg-araluki-dev-6155
+  POSTGRES_SECRET_NAME: PostgresConnectionString
+
+jobs:
+  query:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql-client
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Open database firewall for runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER_IP="$(curl -s https://api.ipify.org)"
+          az postgres flexible-server firewall-rule create \
+            --resource-group "$RESOURCE_GROUP" \
+            --server-name "$POSTGRES_SERVER_NAME" \
+            --name "ghusers-${{ github.run_id }}" \
+            --start-ip-address "$RUNNER_IP" \
+            --end-ip-address "$RUNNER_IP" \
+            --output none
+
+      - name: Query user stats
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONN="$(az keyvault secret show --vault-name "$KEYVAULT_NAME" --name "$POSTGRES_SECRET_NAME" --query value -o tsv)"
+          echo "::add-mask::$CONN"
+          while IFS= read -r pair; do
+            [ -z "$pair" ] && continue
+            key="$(printf '%s' "${pair%%=*}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            val="$(printf '%s' "${pair#*=}" | sed 's/^[[:space:]]*//')"
+            case "$key" in
+              host|server) PGHOST="$val" ;;
+              port) PGPORT="$val" ;;
+              database|"database name"|db) PGDATABASE="$val" ;;
+              username|"user id"|user|uid) PGUSER="$val" ;;
+              password|pwd) PGPASSWORD="$val" ;;
+            esac
+          done <<< "${CONN//;/$'\n'}"
+          export PGHOST PGDATABASE PGUSER PGPASSWORD
+          export PGPORT="${PGPORT:-5432}"
+          export PGSSLMODE="require"
+          echo "::add-mask::$PGPASSWORD"
+
+          echo "=== Total usuarios activos ==="
+          psql -v ON_ERROR_STOP=1 -P pager=off -c \
+            "SELECT count(*) AS total_usuarios FROM users_profile WHERE status = 'ACTIVE';"
+
+          echo "=== Registrados hoy ==="
+          psql -v ON_ERROR_STOP=1 -P pager=off -c \
+            "SELECT count(*) AS nuevos_hoy FROM users_profile
+             WHERE status = 'ACTIVE' AND created_at >= current_date;"
+
+          echo "=== Registrados últimos 7 días ==="
+          psql -v ON_ERROR_STOP=1 -P pager=off -c \
+            "SELECT count(*) AS nuevos_7d FROM users_profile
+             WHERE status = 'ACTIVE' AND created_at >= current_date - interval '7 days';"
+
+          echo "=== Todos los usuarios (phone / external_auth_id / fecha registro) ==="
+          psql -v ON_ERROR_STOP=1 -P pager=off -c \
+            "SELECT phone, external_auth_id, created_at::date AS registered
+             FROM users_profile
+             WHERE status = 'ACTIVE'
+             ORDER BY created_at DESC;"
+
+      - name: Remove database firewall rule
+        if: always()
+        shell: bash
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group "$RESOURCE_GROUP" \
+            --server-name "$POSTGRES_SERVER_NAME" \
+            --name "ghusers-${{ github.run_id }}" \
+            --yes --output none || true
