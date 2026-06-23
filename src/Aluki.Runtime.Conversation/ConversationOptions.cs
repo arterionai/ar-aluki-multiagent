@@ -5,7 +5,7 @@ public sealed class ConversationOptions
     public const string SectionName = "Conversation";
 
     public int HistoryWindowSize { get; set; } = 10;
-    public int LlmTimeoutSeconds { get; set; } = 8;
+    public int LlmTimeoutSeconds { get; set; } = 25;
     public string ErrorFallbackMessage { get; set; } =
         "Tuve un problema procesando tu mensaje, inténtalo de nuevo 🙏";
     public string AudioAcknowledgmentMessage { get; set; } =
