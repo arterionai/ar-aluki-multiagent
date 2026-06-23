@@ -46,7 +46,7 @@ export function useAdminData<T>(
     }
 
     try {
-      const res = await fetch(`${apiConfig.baseUrl}/api/admin/${path}`, {
+      const res = await fetch(`${apiConfig.baseUrl}/api/dashboard/${path}`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       if (!res.ok) throw new Error(`Admin API error: ${res.status} ${res.statusText}`);

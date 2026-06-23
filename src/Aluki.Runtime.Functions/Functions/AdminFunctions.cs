@@ -61,7 +61,7 @@ public sealed class AdminFunctions
 
     [Function("AdminOverview")]
     public async Task<HttpResponseData> GetOverview(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/overview")] HttpRequestData req)
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "dashboard/overview")] HttpRequestData req)
     {
         if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, _config))
             return Unauthorized(req);
@@ -137,7 +137,7 @@ public sealed class AdminFunctions
 
     [Function("AdminAiCosts")]
     public async Task<HttpResponseData> GetAiCosts(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/ai-costs")] HttpRequestData req)
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "dashboard/ai-costs")] HttpRequestData req)
     {
         if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, _config))
             return Unauthorized(req);
@@ -208,7 +208,7 @@ public sealed class AdminFunctions
 
     [Function("AdminTenants")]
     public async Task<HttpResponseData> GetTenants(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/tenants")] HttpRequestData req)
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "dashboard/tenants")] HttpRequestData req)
     {
         if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, _config))
             return Unauthorized(req);
@@ -274,7 +274,7 @@ public sealed class AdminFunctions
 
     [Function("AdminWhatsApp")]
     public async Task<HttpResponseData> GetWhatsApp(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/whatsapp")] HttpRequestData req)
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "dashboard/whatsapp")] HttpRequestData req)
     {
         if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, _config))
             return Unauthorized(req);
@@ -341,7 +341,7 @@ public sealed class AdminFunctions
 
     [Function("AdminBilling")]
     public async Task<HttpResponseData> GetBilling(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/billing")] HttpRequestData req)
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "dashboard/billing")] HttpRequestData req)
     {
         if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, _config))
             return Unauthorized(req);
@@ -410,7 +410,7 @@ public sealed class AdminFunctions
 
     [Function("AdminSystem")]
     public async Task<HttpResponseData> GetSystem(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/system")] HttpRequestData req)
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "dashboard/system")] HttpRequestData req)
     {
         if (!await AdminTokenValidator.IsValidAsync(req.Headers.TryGetValues("Authorization", out var h) ? h.FirstOrDefault() : null, _config))
             return Unauthorized(req);
