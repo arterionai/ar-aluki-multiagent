@@ -1,5 +1,6 @@
 using Aluki.Runtime.Abstractions.Conversation;
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
+using Aluki.Runtime.Abstractions.Skills.Feedback;
 using Aluki.Runtime.Capture.Persistence;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,6 +17,9 @@ public static class ConversationServiceCollectionExtensions
     {
         // Shared connection factory (also registered by AddWhatsAppCapture / AddPersonalMemory).
         services.TryAddSingleton<NpgsqlConnectionFactory>();
+
+        // Default no-op — replaced by AddFeedbackCapture() when Host registers the real sink.
+        services.TryAddSingleton<IFeedbackCaptureSink, NoOpFeedbackCaptureSink>();
 
         services.AddSingleton<IConversationHistoryStore, ConversationHistoryStore>();
         services.AddSingleton<IOutboundMessageStore, OutboundMessageStore>();

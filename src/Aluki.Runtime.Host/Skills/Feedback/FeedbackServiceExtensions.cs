@@ -14,6 +14,7 @@ public static class FeedbackServiceExtensions
         services.AddScoped<FeedbackRepository>();
         services.AddScoped<IFeedbackRepository>(sp => sp.GetRequiredService<FeedbackRepository>());
         services.AddScoped<FeedbackCaptureService>();
+        services.AddSingleton<IFeedbackCaptureSink, FeedbackCaptureSink>();
         return services;
     }
 }

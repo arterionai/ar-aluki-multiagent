@@ -2,6 +2,7 @@ using Aluki.Runtime.Abstractions.Conversation;
 using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Security;
+using Aluki.Runtime.Abstractions.Skills.Feedback;
 using Aluki.Runtime.Capture.Channels.WhatsApp;
 using Aluki.Runtime.Memory;
 using Aluki.Runtime.Memory.Chat;
@@ -21,6 +22,7 @@ public sealed class ConversationalResponseAgent : IDomainAgent
     public const string Id = "conversation.whatsapp_response";
 
     private readonly IMemoryIngestionSink _ingestionSink;
+    private readonly IFeedbackCaptureSink _feedbackSink;
     private readonly MemoryRecallService _recallService;
     private readonly IChatModelRouter _chatRouter;
     private readonly IWhatsAppMessenger _messenger;
@@ -32,6 +34,7 @@ public sealed class ConversationalResponseAgent : IDomainAgent
 
     public ConversationalResponseAgent(
         IMemoryIngestionSink ingestionSink,
+        IFeedbackCaptureSink feedbackSink,
         MemoryRecallService recallService,
         IChatModelRouter chatRouter,
         IWhatsAppMessenger messenger,
@@ -42,6 +45,7 @@ public sealed class ConversationalResponseAgent : IDomainAgent
         ILogger<ConversationalResponseAgent> logger)
     {
         _ingestionSink = ingestionSink;
+        _feedbackSink = feedbackSink;
         _recallService = recallService;
         _chatRouter = chatRouter;
         _messenger = messenger;
@@ -102,7 +106,7 @@ public sealed class ConversationalResponseAgent : IDomainAgent
             return new AgentHandleResult(true, OutcomeCode: "no_text_skipped");
         }
 
-        // 1. Memory ingestion (best-effort, non-blocking — fire and forget).
+        // 1. Memory ingestion + feedback capture (best-effort, non-blocking — fire and forget).
         _ = Task.Run(async () =>
         {
             try
@@ -122,6 +126,11 @@ public sealed class ConversationalResponseAgent : IDomainAgent
             {
                 _logger.LogWarning(ex, "Background memory ingestion failed. message_id={MessageId}", message.MessageId);
             }
+
+            await _feedbackSink.TryCaptureAsync(
+                principal.TenantId, principal.UserId,
+                message.MessageId, text,
+                CancellationToken.None);
         }, CancellationToken.None);
 
         // 2. Fetch history and recall in parallel.
