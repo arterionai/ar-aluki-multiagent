@@ -166,6 +166,7 @@ public sealed class ConversationalResponseAgent : IDomainAgent
 
             // Append suffix when memory has no relevant data.
             if (recallOutcome.Status == MemoryStatus.NoResult
+                && !isFirstMessage
                 && !responseText.Contains(_options.NoMemoryMessageSuffix, StringComparison.OrdinalIgnoreCase))
             {
                 responseText += _options.NoMemoryMessageSuffix;
