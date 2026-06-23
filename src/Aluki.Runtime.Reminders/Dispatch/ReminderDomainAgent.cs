@@ -61,61 +61,79 @@ public sealed class ReminderDomainAgent : IDomainAgent
         var correlationId = message.CorrelationId ?? message.MessageId;
         var text = message.Text ?? string.Empty;
 
-        // Resolve user's timezone from memory (best-effort — falls back to default).
-        var userTimezone = await ResolveUserTimezoneAsync(principal, correlationId, ct);
-
-        var parsed = await _parser.ParseAsync(text, DateTimeOffset.UtcNow, userTimezone, ct);
-
-        if (!parsed.Success || parsed.ScheduledTimeUtc is null)
+        try
         {
-            const string clarify =
-                "No pude entender cuándo quieres que te recuerde. "
-                + "¿Puedes ser más específico? Por ejemplo: «recuérdame en 30 minutos revisar el correo» 🙏";
-            await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, clarify, ct);
-            return new AgentHandleResult(true, OutcomeCode: "reminder_clarification_needed");
+            // Resolve user's timezone from memory (best-effort — falls back to default).
+            var userTimezone = await ResolveUserTimezoneAsync(principal, correlationId, ct);
+
+            var parsed = await _parser.ParseAsync(text, DateTimeOffset.UtcNow, userTimezone, ct);
+
+            if (!parsed.Success || parsed.ScheduledTimeUtc is null)
+            {
+                const string clarify =
+                    "No pude entender cuándo quieres que te recuerde. "
+                    + "¿Puedes ser más específico? Por ejemplo: «recuérdame en 30 minutos revisar el correo» 🙏";
+                await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, clarify, ct);
+                return new AgentHandleResult(true, OutcomeCode: "reminder_clarification_needed");
+            }
+
+            // Encode routing in delivery_channel so WhatsAppReminderDeliveryChannel can address the message.
+            var deliveryChannel = $"whatsapp:{phoneNumberId}:{recipientWaId}";
+
+            var request = new CreateReminderRequest(
+                ReminderId: null,
+                CorrelationId: correlationId,
+                PrincipalContext: new ReminderPrincipalContext(
+                    TenantId: principal.TenantId,
+                    ContextId: principal.ContextId,
+                    UserId: principal.UserId),
+                ReminderText: parsed.ReminderText,
+                ScheduledTimeUtc: parsed.ScheduledTimeUtc,
+                Timezone: userTimezone,
+                ReminderType: ReminderType.OneShot,
+                Recurrence: null,
+                DeliveryChannel: deliveryChannel);
+
+            var result = await _reminderService.CreateAsync(request, ct);
+
+            string reply;
+            if (result.StatusCode is 200 or 201)
+            {
+                reply = BuildConfirmation(parsed.ReminderText!, parsed.ScheduledTimeUtc!.Value, userTimezone);
+            }
+            else if (result.StatusCode == 409)
+            {
+                reply = "Ya tienes demasiados recordatorios activos. Cancela alguno primero y vuelve a intentarlo. 📋";
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "ReminderDomainAgent: CreateAsync returned {StatusCode}. correlation_id={CorrelationId}",
+                    result.StatusCode, correlationId);
+                reply = "No pude crear el recordatorio en este momento. Inténtalo de nuevo. 🙏";
+            }
+
+            await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, reply, ct);
+
+            return new AgentHandleResult(
+                result.StatusCode is 200 or 201,
+                OutcomeCode: result.StatusCode is 200 or 201 ? "reminder_scheduled" : "reminder_failed");
         }
-
-        // Encode routing in delivery_channel so WhatsAppReminderDeliveryChannel can address the message.
-        var deliveryChannel = $"whatsapp:{phoneNumberId}:{recipientWaId}";
-
-        var request = new CreateReminderRequest(
-            ReminderId: null,
-            CorrelationId: correlationId,
-            PrincipalContext: new ReminderPrincipalContext(
-                TenantId: principal.TenantId,
-                ContextId: principal.ContextId,
-                UserId: principal.UserId),
-            ReminderText: parsed.ReminderText,
-            ScheduledTimeUtc: parsed.ScheduledTimeUtc,
-            Timezone: userTimezone,
-            ReminderType: ReminderType.OneShot,
-            Recurrence: null,
-            DeliveryChannel: deliveryChannel);
-
-        var result = await _reminderService.CreateAsync(request, ct);
-
-        string reply;
-        if (result.StatusCode is 200 or 201)
+        catch (Exception ex)
         {
-            reply = BuildConfirmation(parsed.ReminderText!, parsed.ScheduledTimeUtc!.Value, userTimezone);
-        }
-        else if (result.StatusCode == 409)
-        {
-            reply = "Ya tienes demasiados recordatorios activos. Cancela alguno primero y vuelve a intentarlo. 📋";
-        }
-        else
-        {
-            _logger.LogWarning(
-                "ReminderDomainAgent: CreateAsync returned {StatusCode}. correlation_id={CorrelationId}",
-                result.StatusCode, correlationId);
-            reply = "No pude crear el recordatorio en este momento. Inténtalo de nuevo. 🙏";
-        }
+            _logger.LogError(ex,
+                "ReminderDomainAgent failed. message_id={MessageId} correlation_id={CorrelationId}",
+                message.MessageId, correlationId);
 
-        await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, reply, ct);
+            // Graceful degradation: CancellationToken.None so the fallback is never skipped
+            // if a timeout on the LLM parse fired and cancelled ct.
+            await _messenger.SendTextMessageAsync(
+                phoneNumberId, recipientWaId,
+                "No pude crear el recordatorio en este momento. Inténtalo de nuevo. 🙏",
+                CancellationToken.None);
 
-        return new AgentHandleResult(
-            result.StatusCode is 200 or 201,
-            OutcomeCode: result.StatusCode is 200 or 201 ? "reminder_scheduled" : "reminder_failed");
+            return new AgentHandleResult(false, ErrorCode: "reminder_exception", ErrorMessage: ex.Message);
+        }
     }
 
     private async Task<string> ResolveUserTimezoneAsync(
