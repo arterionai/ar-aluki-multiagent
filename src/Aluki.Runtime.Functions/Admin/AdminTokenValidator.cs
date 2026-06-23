@@ -1,47 +1,78 @@
-// TODO: Replace API key validation with Azure AD JWT validation once an app registration
-// is created. Use Admin:TenantId and Admin:ClientId config keys with
-// Microsoft.IdentityModel.Tokens for proper Bearer JWT verification.
-
+using System.IdentityModel.Tokens.Jwt;
 using Microsoft.Extensions.Configuration;
+using Microsoft.IdentityModel.Protocols;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Microsoft.IdentityModel.Tokens;
 
 namespace Aluki.Runtime.Functions.Admin;
 
-/// <summary>
-/// Validates admin API requests using a shared API key (MVP).
-/// Future: validate Azure AD Bearer JWT tokens.
-/// </summary>
 public static class AdminTokenValidator
 {
-    /// <summary>
-    /// Returns true if the Authorization header contains a valid Bearer token.
-    /// MVP: compares to Admin:ApiKey config value.
-    /// </summary>
-    public static bool IsValid(string? authHeader, IConfiguration config)
-    {
-        if (string.IsNullOrWhiteSpace(authHeader))
-            return false;
+    private static readonly JwtSecurityTokenHandler Handler = new();
+    private static IConfigurationManager<OpenIdConnectConfiguration>? _configManager;
+    private static string? _lastDiscoveryUrl;
+    private static readonly object Lock = new();
 
-        if (!authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return false;
+    public static async Task<bool> IsValidAsync(string? authHeader, IConfiguration config)
+    {
+        if (string.IsNullOrWhiteSpace(authHeader)) return false;
+        if (!authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) return false;
 
         var token = authHeader["Bearer ".Length..].Trim();
-        if (string.IsNullOrWhiteSpace(token))
-            return false;
+        if (string.IsNullOrWhiteSpace(token)) return false;
 
-        var expected = config["Admin:ApiKey"];
-        if (string.IsNullOrWhiteSpace(expected))
-            return false;
+        var tenantId = config["Admin:TenantId"] ?? "7b1683c8-3607-4002-a544-89f96fa0ef3a";
+        var clientId = config["Admin:ClientId"] ?? "1e1562a3-eb31-4b9d-beed-eeb8129961f9";
+        var discoveryUrl = $"https://login.microsoftonline.com/{tenantId}/v2.0/.well-known/openid-configuration";
 
-        // Constant-time comparison to avoid timing attacks
-        return CryptographicEquals(token, expected);
+        var mgr = GetConfigurationManager(discoveryUrl);
+        OpenIdConnectConfiguration oidcConfig;
+        try
+        {
+            oidcConfig = await mgr.GetConfigurationAsync(CancellationToken.None);
+        }
+        catch
+        {
+            return false;
+        }
+
+        var validationParams = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = $"https://login.microsoftonline.com/{tenantId}/v2.0",
+            ValidateAudience = true,
+            ValidAudience = $"api://{clientId}",
+            ValidateLifetime = true,
+            IssuerSigningKeys = oidcConfig.SigningKeys,
+            ValidateIssuerSigningKey = true,
+        };
+
+        try
+        {
+            var principal = Handler.ValidateToken(token, validationParams, out _);
+            var tid = principal.FindFirst("tid")?.Value;
+            return string.Equals(tid, tenantId, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
-    private static bool CryptographicEquals(string a, string b)
+    private static IConfigurationManager<OpenIdConnectConfiguration> GetConfigurationManager(string discoveryUrl)
     {
-        if (a.Length != b.Length) return false;
-        var result = 0;
-        for (var i = 0; i < a.Length; i++)
-            result |= a[i] ^ b[i];
-        return result == 0;
+        lock (Lock)
+        {
+            if (_configManager == null || _lastDiscoveryUrl != discoveryUrl)
+            {
+                _configManager = new ConfigurationManager<OpenIdConnectConfiguration>(
+                    discoveryUrl,
+                    new OpenIdConnectConfigurationRetriever(),
+                    new HttpDocumentRetriever { RequireHttps = true }
+                );
+                _lastDiscoveryUrl = discoveryUrl;
+            }
+            return _configManager;
+        }
     }
 }

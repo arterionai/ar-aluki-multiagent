@@ -1,43 +1,70 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { apiConfig } from '@/lib/msal-config';
-import { adminApi } from '@/lib/api-client';
-
-function getToken(): string {
-  // MVP: use the static API key from env
-  return apiConfig.adminApiKey;
-}
+import { useMsal } from '@azure/msal-react';
+import { loginRequest, apiConfig } from '@/lib/msal-config';
+import type {
+  OverviewData,
+  AiCostsData,
+  TenantsData,
+  WhatsAppData,
+  BillingData,
+  SystemData,
+} from '@/types/admin';
 
 export function useAdminData<T>(
-  fetcher: (token: string) => Promise<T>
+  path: string
 ): { data: T | null; loading: boolean; error: string | null; refresh: () => void } {
+  const { instance, accounts } = useMsal();
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    const account = accounts[0];
+    if (!account) {
+      await instance.loginRedirect(loginRequest);
+      return;
+    }
+
     setLoading(true);
     setError(null);
+
+    let accessToken: string;
     try {
-      const token = getToken();
-      const result = await fetcher(token);
-      setData(result);
+      const result = await instance.acquireTokenSilent({ ...loginRequest, account });
+      accessToken = result.accessToken;
+    } catch {
+      try {
+        await instance.acquireTokenRedirect({ ...loginRequest, account });
+      } catch {
+        setError('No se pudo obtener el token de autenticación');
+        setLoading(false);
+      }
+      return;
+    }
+
+    try {
+      const res = await fetch(`${apiConfig.baseUrl}/api/admin/${path}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!res.ok) throw new Error(`Admin API error: ${res.status} ${res.statusText}`);
+      setData(await res.json() as T);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
     }
-  }, [fetcher]);
+  }, [path, instance, accounts]);
 
   useEffect(() => { load(); }, [load]);
 
   return { data, loading, error, refresh: load };
 }
 
-export const useOverviewData = () => useAdminData(adminApi.overview);
-export const useAiCostsData = () => useAdminData(adminApi.aiCosts);
-export const useTenantsData = () => useAdminData(adminApi.tenants);
-export const useWhatsAppData = () => useAdminData(adminApi.whatsapp);
-export const useBillingData = () => useAdminData(adminApi.billing);
-export const useSystemData = () => useAdminData(adminApi.system);
+export const useOverviewData = () => useAdminData<OverviewData>('overview');
+export const useAiCostsData = () => useAdminData<AiCostsData>('ai-costs');
+export const useTenantsData = () => useAdminData<TenantsData>('tenants');
+export const useWhatsAppData = () => useAdminData<WhatsAppData>('whatsapp');
+export const useBillingData = () => useAdminData<BillingData>('billing');
+export const useSystemData = () => useAdminData<SystemData>('system');
