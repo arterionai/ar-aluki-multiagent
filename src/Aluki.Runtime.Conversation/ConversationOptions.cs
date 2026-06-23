@@ -24,7 +24,7 @@ public sealed class ConversationOptions
         Si en algún momento quieres que eliminemos toda tu información, solo pídenoslo y lo hacemos. 🙏
         """;
 
-
+    public string OnboardingInstruction { get; set; } =
         """
         This is the user's FIRST message ever. Begin your reply with a brief, warm welcome that:
         1. Introduces yourself as Aluki and mentions you are in a testing/beta phase — the team wants real
