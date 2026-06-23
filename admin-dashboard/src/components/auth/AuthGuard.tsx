@@ -1,15 +1,20 @@
 'use client';
 
 import { useIsAuthenticated, useMsal } from '@azure/msal-react';
+import { InteractionStatus } from '@azure/msal-browser';
 import { loginRequest } from '@/lib/msal-config';
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { instance } = useMsal();
+  const { instance, inProgress } = useMsal();
   const isAuthenticated = useIsAuthenticated();
-
-  // For MVP with API key auth, we skip the MSAL login requirement.
-  // Once Azure AD is configured, remove this check and enforce isAuthenticated.
   const msalConfigured = Boolean(process.env.NEXT_PUBLIC_AAD_CLIENT_ID);
+
+  // While MSAL is initializing or processing a redirect, render nothing.
+  // Showing the sign-in button here would cause an infinite redirect loop
+  // because isAuthenticated is false during handleRedirect.
+  if (inProgress !== InteractionStatus.None) {
+    return null;
+  }
 
   if (msalConfigured && !isAuthenticated) {
     return (
@@ -21,12 +26,12 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-white mb-2">Aluki Admin</h1>
-          <p className="text-gray-400 mb-6 text-sm">Sign in with your Microsoft account to access the admin dashboard.</p>
+          <p className="text-gray-400 mb-6 text-sm">Inicia sesión con tu cuenta Microsoft para acceder al dashboard.</p>
           <button
             onClick={() => instance.loginRedirect(loginRequest)}
             className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition-colors"
           >
-            Sign in with Microsoft
+            Iniciar sesión con Microsoft
           </button>
         </div>
       </div>

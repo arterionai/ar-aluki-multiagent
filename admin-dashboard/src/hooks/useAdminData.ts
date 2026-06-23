@@ -23,7 +23,8 @@ export function useAdminData<T>(
   const load = useCallback(async () => {
     const account = accounts[0];
     if (!account) {
-      await instance.loginRedirect(loginRequest);
+      // AuthGuard handles unauthenticated state; nothing to load yet.
+      setLoading(false);
       return;
     }
 
