@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
@@ -13,10 +14,10 @@ public static class AdminTokenValidator
     private static string? _lastDiscoveryUrl;
     private static readonly object Lock = new();
 
-    public static async Task<bool> IsValidAsync(string? authHeader, IConfiguration config)
+    public static async Task<bool> IsValidAsync(string? authHeader, IConfiguration config, ILogger? logger = null)
     {
-        if (string.IsNullOrWhiteSpace(authHeader)) return false;
-        if (!authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.IsNullOrWhiteSpace(authHeader)) { logger?.LogWarning("AdminTokenValidator: no Authorization header"); return false; }
+        if (!authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) { logger?.LogWarning("AdminTokenValidator: header not Bearer"); return false; }
 
         var token = authHeader["Bearer ".Length..].Trim();
         if (string.IsNullOrWhiteSpace(token)) return false;
@@ -31,10 +32,21 @@ public static class AdminTokenValidator
         {
             oidcConfig = await mgr.GetConfigurationAsync(CancellationToken.None);
         }
-        catch
+        catch (Exception ex)
         {
+            logger?.LogError(ex, "AdminTokenValidator: OIDC discovery failed for {Url}", discoveryUrl);
             return false;
         }
+
+        // Peek at the token header to log aud/iss without full validation
+        try
+        {
+            var raw = Handler.ReadJwtToken(token);
+            logger?.LogInformation("AdminTokenValidator: aud={Aud} iss={Iss} tid={Tid}",
+                string.Join(",", raw.Audiences), raw.Issuer,
+                raw.Claims.FirstOrDefault(c => c.Type == "tid")?.Value ?? "(none)");
+        }
+        catch { /* best-effort peek */ }
 
         var validationParams = new TokenValidationParameters
         {
@@ -52,10 +64,13 @@ public static class AdminTokenValidator
         {
             var principal = Handler.ValidateToken(token, validationParams, out _);
             var tid = principal.FindFirst("tid")?.Value;
-            return string.Equals(tid, tenantId, StringComparison.OrdinalIgnoreCase);
+            var ok = string.Equals(tid, tenantId, StringComparison.OrdinalIgnoreCase);
+            if (!ok) logger?.LogWarning("AdminTokenValidator: tid mismatch — got {Tid}, expected {TenantId}", tid, tenantId);
+            return ok;
         }
-        catch
+        catch (Exception ex)
         {
+            logger?.LogWarning("AdminTokenValidator: ValidateToken failed — {Msg}", ex.Message);
             return false;
         }
     }
