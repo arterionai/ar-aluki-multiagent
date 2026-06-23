@@ -3,7 +3,7 @@
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface UsageAreaChartProps {
-  data: { day: string; [key: string]: number | string }[];
+  data: Record<string, string | number>[];
   dataKey: string;
   color?: string;
   label?: string;

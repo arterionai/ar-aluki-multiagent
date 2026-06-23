@@ -10,6 +10,7 @@ export interface OverviewData {
 export interface DayCount {
   day: string;
   count: number;
+  [key: string]: string | number;
 }
 
 export interface DayTokenCost {

@@ -3,7 +3,7 @@
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface CostBarChartProps {
-  data: { [key: string]: number | string }[];
+  data: Record<string, string | number>[];
   dataKey: string;
   nameKey: string;
   color?: string;
