@@ -70,7 +70,9 @@ public static class AdminTokenValidator
         try
         {
             var principal = Handler.ValidateToken(token, validationParams, out _);
-            var tid = principal.FindFirst("tid")?.Value;
+            // JwtSecurityTokenHandler remaps "tid" → the long URI in v1 tokens; check both.
+            var tid = principal.FindFirst("tid")?.Value
+                   ?? principal.FindFirst("http://schemas.microsoft.com/identity/claims/tenantid")?.Value;
             var ok = string.Equals(tid, tenantId, StringComparison.OrdinalIgnoreCase);
             if (!ok) logger?.LogWarning("AdminTokenValidator: tid mismatch — got {Tid}, expected {TenantId}", tid, tenantId);
             return ok;
