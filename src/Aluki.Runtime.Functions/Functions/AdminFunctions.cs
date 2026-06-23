@@ -77,9 +77,9 @@ public sealed class AdminFunctions
             // Messages last 24h, 7d, 30d
             await using var msgCmd = new NpgsqlCommand("""
                 SELECT
-                    COUNT(*) FILTER (WHERE recorded_at >= NOW() - INTERVAL '24 hours') AS messages_24h,
-                    COUNT(*) FILTER (WHERE recorded_at >= NOW() - INTERVAL '7 days')  AS messages_7d,
-                    COUNT(*) FILTER (WHERE recorded_at >= NOW() - INTERVAL '30 days') AS messages_30d
+                    COUNT(*) FILTER (WHERE created_at_utc >= NOW() - INTERVAL '24 hours') AS messages_24h,
+                    COUNT(*) FILTER (WHERE created_at_utc >= NOW() - INTERVAL '7 days')  AS messages_7d,
+                    COUNT(*) FILTER (WHERE created_at_utc >= NOW() - INTERVAL '30 days') AS messages_30d
                 FROM app.unified_message_artifact
                 """, conn);
 
@@ -127,10 +127,9 @@ public sealed class AdminFunctions
             {
                 await using var usersCmd = new NpgsqlCommand("""
                     SELECT
-                        COUNT(DISTINCT u.id)                                                         AS total_users,
-                        COUNT(DISTINCT u.id) FILTER (WHERE u.created_at >= CURRENT_DATE::timestamptz) AS new_today
+                        COUNT(DISTINCT u.id)                                                                    AS total_users,
+                        COUNT(DISTINCT u.id) FILTER (WHERE u.created_at >= CURRENT_DATE AT TIME ZONE 'UTC')    AS new_today
                     FROM app.users_profile u
-                    WHERE u.phone IS NOT NULL
                     """, conn);
                 await using var usersReader = await usersCmd.ExecuteReaderAsync();
                 if (await usersReader.ReadAsync())
