@@ -152,7 +152,9 @@ public sealed class ConversationalResponseAgent : IDomainAgent
             var recall = recallOutcome.Status != MemoryStatus.NoResult ? recallOutcome.Recall : null;
 
             // 3. Build prompt and call LLM.
-            var systemPrompt = _promptBuilder.BuildSystemPrompt();
+            var isFirstMessage = history.Count == 0;
+            var systemPrompt = _promptBuilder.BuildSystemPrompt(
+                isFirstMessage ? _options.OnboardingInstruction : null);
             var userPrompt = _promptBuilder.BuildUserPrompt(text, history, recall);
 
             var responseText = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, timeoutCts.Token);
