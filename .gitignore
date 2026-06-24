@@ -2,3 +2,4 @@ bin/
 obj/
 .vs/
 .claude/transcripts/
+.claude/settings.local.json
