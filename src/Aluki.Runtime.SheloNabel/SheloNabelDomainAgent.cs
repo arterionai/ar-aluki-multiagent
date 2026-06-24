@@ -12,6 +12,7 @@ using Aluki.Runtime.Memory.Recall;
 using Aluki.Runtime.Reminders;
 using Aluki.Runtime.Reminders.Dispatch;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aluki.Runtime.SheloNabel;
 
@@ -35,10 +36,10 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
 {
     public const string Id = "shelonabel.sales_assistant";
 
-    // wa_id of the authorized owner (no '+' prefix, as sent by Meta).
-    private const string AuthorizedWaId = "14252307522";
     private const string DefaultTimezone = "America/Mexico_City";
     private const int ReorderDays = 30;
+
+    private readonly IReadOnlySet<string> _authorizedWaIds;
 
     private readonly ReminderService _reminderService;
     private readonly ReminderIntentParser _parser;
@@ -54,6 +55,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
     private readonly ILogger<SheloNabelDomainAgent> _logger;
 
     public SheloNabelDomainAgent(
+        IOptions<SheloNabelOptions> options,
         ReminderService reminderService,
         ReminderIntentParser parser,
         IMemoryRecallService recallService,
@@ -67,6 +69,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
         SheloNabelPromptBuilder promptBuilder,
         ILogger<SheloNabelDomainAgent> logger)
     {
+        _authorizedWaIds = options.Value.ParsedWaIds();
         _reminderService = reminderService;
         _parser = parser;
         _recallService = recallService;
@@ -87,7 +90,8 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
 
     public bool ClaimsIntent(UnifiedMessage message, PrincipalContext principal)
         => message.ChannelType == ChannelType.WhatsApp
-           && message.SenderExternalId == AuthorizedWaId
+           && message.SenderExternalId is not null
+           && _authorizedWaIds.Contains(message.SenderExternalId)
            && !string.IsNullOrWhiteSpace(message.PhoneNumberId);
 
     public async Task<AgentHandleResult> HandleAsync(

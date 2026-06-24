@@ -48,9 +48,10 @@ var host = new HostBuilder()
 
         services.AddConversationalResponse(context.Configuration);
 
-        // Sheló NABEL sales assistant demo (priority 40, owner number only).
+        // Sheló NABEL sales assistant — members of the shelo tenant.
+        // Authorized wa_ids configurable via SheloNabel:AuthorizedWaIds app setting.
         // Real media/transcription clients are already registered above via AddHttpClient.
-        services.AddSheloNabelAssistant();
+        services.AddSheloNabelAssistant(context.Configuration);
     })
     .Build();
 
