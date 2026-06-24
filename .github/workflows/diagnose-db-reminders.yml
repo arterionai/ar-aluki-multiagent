@@ -35,8 +35,8 @@ jobs:
           RUNNER_IP=$(curl -s https://api.ipify.org)
           az postgres flexible-server firewall-rule create \
             --resource-group "$RESOURCE_GROUP" \
-            --name "$POSTGRES_SERVER_NAME" \
-            --rule-name "diag-runner-$GITHUB_RUN_ID" \
+            --server-name "$POSTGRES_SERVER_NAME" \
+            --name "diag-runner-$GITHUB_RUN_ID" \
             --start-ip-address "$RUNNER_IP" \
             --end-ip-address "$RUNNER_IP"
 
@@ -140,6 +140,6 @@ jobs:
         run: |
           az postgres flexible-server firewall-rule delete \
             --resource-group "$RESOURCE_GROUP" \
-            --name "$POSTGRES_SERVER_NAME" \
-            --rule-name "diag-runner-$GITHUB_RUN_ID" \
+            --server-name "$POSTGRES_SERVER_NAME" \
+            --name "diag-runner-$GITHUB_RUN_ID" \
             --yes || true
