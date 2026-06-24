@@ -67,7 +67,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
         try
         {
             // Resolve user's timezone from memory (best-effort — falls back to default).
-            var userTimezone = await ResolveUserTimezoneAsync(principal, correlationId, ct);
+            var (userTimezone, timezoneFromMemory) = await ResolveUserTimezoneAsync(principal, correlationId, ct);
 
             parsed = await _parser.ParseAsync(text, DateTimeOffset.UtcNow, userTimezone, ct);
 
@@ -103,6 +103,8 @@ public sealed class ReminderDomainAgent : IDomainAgent
             if (result.StatusCode is 200 or 201)
             {
                 reply = BuildConfirmation(parsed.ReminderText!, parsed.ScheduledTimeUtc!.Value, userTimezone);
+                if (!timezoneFromMemory)
+                    reply += "\n\n¿En qué ciudad vives? Así podré enviarte los próximos recordatorios a la hora local correcta. 🌎";
             }
             else if (result.StatusCode == 409)
             {
@@ -153,7 +155,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
         }
     }
 
-    private async Task<string> ResolveUserTimezoneAsync(
+    private async Task<(string Timezone, bool FromMemory)> ResolveUserTimezoneAsync(
         PrincipalContext principal,
         string correlationId,
         CancellationToken ct)
@@ -184,7 +186,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
                     _logger.LogInformation(
                         "ReminderDomainAgent: resolved timezone {Timezone} from memory. correlation_id={CorrelationId}",
                         tz, correlationId);
-                    return tz;
+                    return (tz, true);
                 }
             }
         }
@@ -195,7 +197,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
                 correlationId);
         }
 
-        return DefaultTimezone;
+        return (DefaultTimezone, false);
     }
 
     private static string BuildConfirmation(string reminderText, DateTimeOffset scheduledUtc, string timezone)
