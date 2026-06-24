@@ -41,7 +41,15 @@ public sealed class PrincipalContextResolver : IPrincipalContextResolver
             _logger.LogInformation("PrincipalContextResolver: provisioned new principal for {Sender} userId={UserId}", identity.SenderExternalId, user);
         }
 
-        var membership = await ResolveMembershipAsync(connection, user.Value, identity.TenantHint, cancellationToken);
+        // When no explicit TenantHint is present, check whether the inbound phone_number_id
+        // maps to an org tenant via tenant_whatsapp_channels. This enables automatic
+        // ORGANIZATION tenant routing when a user messages a business WA number.
+        var tenantHint = identity.TenantHint
+            ?? (identity.PhoneNumberId is not null
+                ? await ResolveChannelTenantAsync(connection, identity.PhoneNumberId, cancellationToken)
+                : null);
+
+        var membership = await ResolveMembershipAsync(connection, user.Value, tenantHint, cancellationToken);
         if (membership is null)
         {
             return PrincipalResolution.Deny(
@@ -222,6 +230,24 @@ public sealed class PrincipalContextResolver : IPrincipalContextResolver
             await tx.RollbackAsync(ct);
             throw;
         }
+    }
+
+    private static async Task<Guid?> ResolveChannelTenantAsync(
+        NpgsqlConnection connection,
+        string phoneNumberId,
+        CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            select tenant_id
+            from tenant_whatsapp_channels
+            where phone_number_id = @phone and status = 'active'
+            limit 1;
+            """,
+            connection);
+        cmd.Parameters.AddWithValue("phone", phoneNumberId);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result is null or DBNull ? null : (Guid)result;
     }
 
     private static async Task<Guid?> FindUserAsync(

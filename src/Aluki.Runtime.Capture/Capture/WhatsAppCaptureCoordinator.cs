@@ -376,7 +376,8 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
             SenderExternalId: envelope.Sender.ExternalUserId,
             TenantHint: tenantHint,
             ContextId: contextId,
-            CorrelationId: correlationId);
+            CorrelationId: correlationId,
+            PhoneNumberId: envelope.PhoneNumberId);
     }
 
     private static async Task<SkillResult> RunSkillAsync(

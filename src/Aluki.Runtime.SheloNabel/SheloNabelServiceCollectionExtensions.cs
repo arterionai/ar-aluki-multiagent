@@ -24,6 +24,7 @@ public static class SheloNabelServiceCollectionExtensions
         services.TryAddSingleton<ITranscriptionProvider, NullTranscriptionProvider>();
 
         services.AddSingleton<SheloNabelPromptBuilder>();
+        services.AddSingleton<SheloNabelCrmService>();
         services.AddSingleton<SheloNabelDomainAgent>();
         services.AddSingleton<IDomainAgent>(sp => sp.GetRequiredService<SheloNabelDomainAgent>());
 

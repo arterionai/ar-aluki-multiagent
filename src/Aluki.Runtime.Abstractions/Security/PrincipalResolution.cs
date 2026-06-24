@@ -8,7 +8,8 @@ public sealed record ChannelIdentity(
     string SenderExternalId,
     Guid? TenantHint,
     Guid? ContextId,
-    string CorrelationId);
+    string CorrelationId,
+    string? PhoneNumberId = null);
 
 /// <summary>Structured reason a scope resolution was denied.</summary>
 public enum ScopeDenialReason

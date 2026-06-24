@@ -52,7 +52,13 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
     private readonly IConversationHistoryStore _historyStore;
     private readonly IOutboundMessageStore _outboundStore;
     private readonly SheloNabelPromptBuilder _promptBuilder;
+    private readonly SheloNabelCrmService _crmService;
     private readonly ILogger<SheloNabelDomainAgent> _logger;
+
+    // Campaign confirmation state: tenant → pending items cached for 5 min.
+    private static readonly Dictionary<Guid, (IReadOnlyList<PendingReorderItem> Items, DateTimeOffset Expires)>
+        _pendingCampaigns = new();
+    private static readonly object _campaignLock = new();
 
     public SheloNabelDomainAgent(
         IOptions<SheloNabelOptions> options,
@@ -67,6 +73,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
         IConversationHistoryStore historyStore,
         IOutboundMessageStore outboundStore,
         SheloNabelPromptBuilder promptBuilder,
+        SheloNabelCrmService crmService,
         ILogger<SheloNabelDomainAgent> logger)
     {
         _authorizedWaIds = options.Value.ParsedWaIds();
@@ -81,6 +88,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
         _historyStore = historyStore;
         _outboundStore = outboundStore;
         _promptBuilder = promptBuilder;
+        _crmService = crmService;
         _logger = logger;
     }
 
@@ -220,7 +228,43 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
                     timeoutCts.Token);
             }
 
-            // --- Path 3: General product/customer query or script request ---
+            // --- Path 3: Sales report ("¿cómo vamos?") ---
+            if (SheloNabelReportDetector.LooksLikeReport(text))
+            {
+                return await HandleSalesReportAsync(
+                    text, principal, systemPrompt, history,
+                    phoneNumberId, recipientWaId, correlationId,
+                    timeoutCts.Token);
+            }
+
+            // --- Path 4: Reorder campaign ---
+            if (SheloNabelCampaignDetector.LooksLikeCampaign(text))
+            {
+                return await HandleCampaignAsync(
+                    text, principal, systemPrompt, history,
+                    phoneNumberId, recipientWaId, correlationId,
+                    timeoutCts.Token);
+            }
+
+            // --- Path 5: Vendedora assignment ---
+            if (SheloNabelVendedoraDetector.LooksLikeAssignment(text))
+            {
+                return await HandleVendedoraAssignmentAsync(
+                    text, principal, systemPrompt, history,
+                    phoneNumberId, recipientWaId, correlationId,
+                    timeoutCts.Token);
+            }
+
+            // --- Path 6: Campaign send confirmation ("sí, envía" after Path 4 preview) ---
+            if (IsCampaignConfirmation(text, principal.TenantId, out var confirmedItems))
+            {
+                return await ExecuteCampaignAsync(
+                    confirmedItems!, principal, systemPrompt, history,
+                    phoneNumberId, recipientWaId, correlationId,
+                    timeoutCts.Token);
+            }
+
+            // --- Path 7: General product/customer query or script request ---
             var userPrompt = _promptBuilder.BuildQueryUserPrompt(text, recall, history);
             var response = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, timeoutCts.Token);
 
@@ -357,6 +401,171 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
 
         await SendResponseAsync(phoneNumberId, recipientWaId, response, principal, correlationId, CancellationToken.None);
         return new AgentHandleResult(true, OutcomeCode: "shelo_sale_recorded");
+    }
+
+    // --- Sales Report ---
+
+    private async Task<AgentHandleResult> HandleSalesReportAsync(
+        string text,
+        PrincipalContext principal,
+        string systemPrompt,
+        IReadOnlyList<ConversationTurn> history,
+        string phoneNumberId,
+        string recipientWaId,
+        string correlationId,
+        CancellationToken ct)
+    {
+        var report = await _crmService.GetSalesReportAsync(principal.TenantId, lookbackDays: 30, ct);
+        var userPrompt = _promptBuilder.BuildReportUserPrompt(text, report, history);
+        var response = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, ct);
+        if (string.IsNullOrWhiteSpace(response))
+            response = $"📊 Resumen (30 días): {report.TotalCreated} reórdenes creados, {report.Delivered} entregados, {report.Pending} pendientes.";
+        await SendResponseAsync(phoneNumberId, recipientWaId, response, principal, correlationId, CancellationToken.None);
+        return new AgentHandleResult(true, OutcomeCode: "shelo_sales_report");
+    }
+
+    // --- Campaign ---
+
+    private async Task<AgentHandleResult> HandleCampaignAsync(
+        string text,
+        PrincipalContext principal,
+        string systemPrompt,
+        IReadOnlyList<ConversationTurn> history,
+        string phoneNumberId,
+        string recipientWaId,
+        string correlationId,
+        CancellationToken ct)
+    {
+        var pending = await _crmService.GetPendingReordersAsync(principal.TenantId, ct);
+
+        if (pending.Count == 0)
+        {
+            await SendResponseAsync(phoneNumberId, recipientWaId,
+                "✅ ¡Todo al día! No hay reórdenes vencidas en este momento.",
+                principal, correlationId, CancellationToken.None);
+            return new AgentHandleResult(true, OutcomeCode: "shelo_campaign_none");
+        }
+
+        // Cache pending items for confirmation (5 min window)
+        lock (_campaignLock)
+        {
+            _pendingCampaigns[principal.TenantId] =
+                (pending, DateTimeOffset.UtcNow.AddMinutes(5));
+        }
+
+        var userPrompt = _promptBuilder.BuildCampaignUserPrompt(text, pending, history);
+        var preview = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, ct);
+        if (string.IsNullOrWhiteSpace(preview))
+            preview = $"Hay {pending.Count} clientes con reorden vencida. ¿Envío los mensajes ahora? Responde 'sí' para confirmar.";
+
+        await SendResponseAsync(phoneNumberId, recipientWaId, preview, principal, correlationId, CancellationToken.None);
+        return new AgentHandleResult(true, OutcomeCode: "shelo_campaign_preview");
+    }
+
+    private async Task<AgentHandleResult> ExecuteCampaignAsync(
+        IReadOnlyList<PendingReorderItem> items,
+        PrincipalContext principal,
+        string systemPrompt,
+        IReadOnlyList<ConversationTurn> history,
+        string phoneNumberId,
+        string recipientWaId,
+        string correlationId,
+        CancellationToken ct)
+    {
+        var sent = 0;
+        var failed = 0;
+
+        foreach (var item in items)
+        {
+            if (item.PhoneNumberId is null || item.WaId is null) { failed++; continue; }
+
+            var campaignMessage =
+                $"Hola 👋 Jaime quería recordarte que ya es tiempo de reordenar: {item.ReminderText}. "
+                + "¿Te preparo el pedido? 💛";
+            try
+            {
+                await _messenger.SendTextMessageAsync(item.PhoneNumberId, item.WaId, campaignMessage, ct);
+                sent++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "SheloNabelDomainAgent: campaign send failed for wa_id={WaId}", item.WaId);
+                failed++;
+            }
+        }
+
+        lock (_campaignLock)
+            _pendingCampaigns.Remove(principal.TenantId);
+
+        var summary = failed == 0
+            ? $"✅ Campaña enviada. {sent} mensajes enviados correctamente."
+            : $"✅ Campaña enviada. {sent} mensajes OK, {failed} fallaron.";
+
+        await SendResponseAsync(phoneNumberId, recipientWaId, summary, principal, correlationId, CancellationToken.None);
+        return new AgentHandleResult(true, OutcomeCode: "shelo_campaign_sent");
+    }
+
+    private static bool IsCampaignConfirmation(
+        string text,
+        Guid tenantId,
+        out IReadOnlyList<PendingReorderItem>? items)
+    {
+        items = null;
+        var normalized = text.Trim().ToLowerInvariant();
+        if (!normalized.StartsWith("sí") && !normalized.StartsWith("si") &&
+            !normalized.StartsWith("dale") && !normalized.StartsWith("envía") &&
+            !normalized.StartsWith("envia") && !normalized.StartsWith("confirma") &&
+            !normalized.StartsWith("ok"))
+            return false;
+
+        lock (_campaignLock)
+        {
+            if (!_pendingCampaigns.TryGetValue(tenantId, out var cached)) return false;
+            if (cached.Expires < DateTimeOffset.UtcNow)
+            {
+                _pendingCampaigns.Remove(tenantId);
+                return false;
+            }
+            items = cached.Items;
+            return true;
+        }
+    }
+
+    // --- Vendedora Assignment ---
+
+    private async Task<AgentHandleResult> HandleVendedoraAssignmentAsync(
+        string text,
+        PrincipalContext principal,
+        string systemPrompt,
+        IReadOnlyList<ConversationTurn> history,
+        string phoneNumberId,
+        string recipientWaId,
+        string correlationId,
+        CancellationToken ct)
+    {
+        // Extract phone number of the vendedora or client from the message
+        var assignedWaId = SheloNabelVendedoraDetector.ExtractPhone(text);
+
+        // Use the principal's own wa_id as the "client" key if none extracted,
+        // or let the LLM figure it out from context. For now assign the sender themselves.
+        var clientId = assignedWaId ?? recipientWaId;
+        var assignedTo = assignedWaId;
+
+        var result = await _crmService.AssignClientAsync(
+            tenantId: principal.TenantId,
+            ownerUserId: principal.UserId,
+            clientExternalId: clientId,
+            assignedToWaId: assignedTo,
+            notes: text,
+            ct);
+
+        var userPrompt = _promptBuilder.BuildAssignmentUserPrompt(text, result, history);
+        var response = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, ct);
+        if (string.IsNullOrWhiteSpace(response))
+            response = $"✅ Asignación guardada para {clientId}.";
+
+        await SendResponseAsync(phoneNumberId, recipientWaId, response, principal, correlationId, CancellationToken.None);
+        return new AgentHandleResult(true, OutcomeCode: "shelo_assignment");
     }
 
     // --- Helpers ---

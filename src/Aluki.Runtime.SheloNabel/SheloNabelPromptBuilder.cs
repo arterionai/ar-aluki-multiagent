@@ -166,6 +166,87 @@ public sealed class SheloNabelPromptBuilder
         return sb.ToString().TrimEnd();
     }
 
+    public string BuildReportUserPrompt(
+        string originalMessage,
+        SalesReportData report,
+        IReadOnlyList<ConversationTurn>? history = null)
+    {
+        var sb = new System.Text.StringBuilder();
+        AppendHistory(sb, history);
+        sb.AppendLine("## Mensaje de Jaime");
+        sb.AppendLine(originalMessage);
+        sb.AppendLine();
+        sb.AppendLine("## Datos del sistema (últimos 30 días)");
+        sb.AppendLine($"- Recordatorios de reorden creados: {report.TotalCreated}");
+        sb.AppendLine($"- Entregados (reorden enviado): {report.Delivered}");
+        sb.AppendLine($"- Pendientes de enviar: {report.Pending}");
+        sb.AppendLine($"- Fallidos: {report.Failed}");
+        if (report.Rows.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Últimos recordatorios:");
+            foreach (var row in report.Rows.Take(8))
+            {
+                var when = row.ScheduledUtc.ToString("dd/MM");
+                sb.AppendLine($"  • {row.Text} — {row.Status} ({when})");
+            }
+        }
+        sb.AppendLine();
+        sb.AppendLine("## Tu tarea");
+        sb.AppendLine("Genera un resumen ejecutivo breve estilo WhatsApp (máx 10 líneas). "
+            + "Menciona los números clave, qué está pendiente, y una sugerencia concreta para aumentar ventas esta semana. "
+            + "Tono cálido de asistente personal, no de reporte corporativo.");
+        return sb.ToString().TrimEnd();
+    }
+
+    public string BuildCampaignUserPrompt(
+        string originalMessage,
+        IReadOnlyList<PendingReorderItem> pending,
+        IReadOnlyList<ConversationTurn>? history = null)
+    {
+        var sb = new System.Text.StringBuilder();
+        AppendHistory(sb, history);
+        sb.AppendLine("## Mensaje de Jaime");
+        sb.AppendLine(originalMessage);
+        sb.AppendLine();
+        sb.AppendLine($"## Clientes con reorden pendiente: {pending.Count}");
+        foreach (var item in pending.Take(10))
+        {
+            var when = item.ScheduledUtc.ToString("dd/MM");
+            sb.AppendLine($"  • {item.ReminderText} — vencía {when} (wa: {item.WaId ?? "?"})");
+        }
+        if (pending.Count > 10)
+            sb.AppendLine($"  ... y {pending.Count - 10} más.");
+        sb.AppendLine();
+        sb.AppendLine("## Tu tarea");
+        sb.AppendLine("Confirma cuántos mensajes se van a enviar y propón el texto base de la campaña. "
+            + "Muestra el mensaje de ejemplo, la cuenta total, y pide confirmación explícita a Jaime antes de enviar. "
+            + "Si Jaime ya confirmó ('sí', 'envía', 'dale') — confirma que se están enviando.");
+        return sb.ToString().TrimEnd();
+    }
+
+    public string BuildAssignmentUserPrompt(
+        string originalMessage,
+        AssignmentResult result,
+        IReadOnlyList<ConversationTurn>? history = null)
+    {
+        var sb = new System.Text.StringBuilder();
+        AppendHistory(sb, history);
+        sb.AppendLine("## Mensaje de Jaime");
+        sb.AppendLine(originalMessage);
+        sb.AppendLine();
+        sb.AppendLine("## Estado del sistema");
+        if (result.AssignedToWaId is not null)
+            sb.AppendLine($"✅ Cliente {result.ClientExternalId} asignado a la vendedora {result.AssignedToWaId}.");
+        else
+            sb.AppendLine($"✅ Asignación registrada para el cliente {result.ClientExternalId} (vendedora pendiente de confirmación).");
+        sb.AppendLine();
+        sb.AppendLine("## Tu tarea");
+        sb.AppendLine("Confirma la asignación de forma cálida y directa. "
+            + "Recuérdale a Jaime que puede ver el progreso de su equipo con '¿cómo vamos?'.");
+        return sb.ToString().TrimEnd();
+    }
+
     private static void AppendHistory(
         System.Text.StringBuilder sb,
         IReadOnlyList<ConversationTurn>? history)

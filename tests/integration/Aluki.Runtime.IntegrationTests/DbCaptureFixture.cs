@@ -136,7 +136,8 @@ public sealed class DbCaptureFixture : IAsyncLifetime
             "023_ai_usage_log.sql",
             "024_audit_sender_tracking.sql",
             "025_dispatch_retry_queue.sql",
-            "026_shelo_nabel_seed.sql"
+            "026_shelo_nabel_seed.sql",
+            "027_multivendor_crm.sql"
         };
 
         await using var connection = new NpgsqlConnection(connectionString);
