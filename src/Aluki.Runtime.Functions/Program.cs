@@ -35,17 +35,17 @@ var host = new HostBuilder()
         services.AddGovernance(context.Configuration);
         services.AddSemanticGraph(context.Configuration);
         services.AddBilling(context.Configuration);
-        services.AddConversationalResponse(context.Configuration);
 
-        // Outbound delivery feedback (read receipt + typing indicator) via Graph API.
+        // Register real media client before AddConversationalResponse so the
+        // TryAddSingleton fallback (NullMetaMediaClient) inside it is skipped.
         services.AddHttpClient<IWhatsAppMessenger, MetaWhatsAppMessenger>();
-
-        // Async media download (Graph API -> Blob). Overrides the no-op queue.
         services.AddHttpClient<IMetaMediaClient, MetaMediaClient>();
         services.AddSingleton<IMediaBlobStore, BlobMediaStore>();
         services.AddSingleton<IMediaDownloadQueue, StorageQueueMediaDownloadQueue>();
         services.AddSingleton<IMediaRefUpdater, MediaRefUpdater>();
         services.AddSingleton<MediaDownloadProcessor>();
+
+        services.AddConversationalResponse(context.Configuration);
     })
     .Build();
 

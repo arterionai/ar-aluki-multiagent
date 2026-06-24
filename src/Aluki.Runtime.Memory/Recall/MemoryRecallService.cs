@@ -9,6 +9,15 @@ namespace Aluki.Runtime.Memory.Recall;
 
 public sealed record MemoryRecallOutcome(string Status, RecallResult Recall);
 
+public interface IMemoryRecallService
+{
+    Task<MemoryRecallOutcome> RecallAsync(
+        PrincipalScope principal,
+        string queryText,
+        string correlationId,
+        CancellationToken cancellationToken);
+}
+
 /// <summary>
 /// Grounded recall (US2): embed the query, vector-search non-deleted in-scope
 /// artifacts, apply the corroboration gate (>=2 to confirm), and synthesize an
@@ -16,7 +25,7 @@ public sealed record MemoryRecallOutcome(string Status, RecallResult Recall);
 /// fabricates: no/low evidence yields explicit no_result/low_confidence, and a
 /// deletion gap is signaled distinctly.
 /// </summary>
-public sealed class MemoryRecallService
+public sealed class MemoryRecallService : IMemoryRecallService
 {
     private readonly IEmbeddingClient _embeddingClient;
     private readonly MemoryStore _store;

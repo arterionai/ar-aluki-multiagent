@@ -4,8 +4,14 @@ using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Capture.Channels.WhatsApp;
+using Aluki.Runtime.Abstractions.Memory;
+using Aluki.Runtime.Capture.Media;
 using Aluki.Runtime.Conversation;
+using Aluki.Runtime.Extraction;
+using Aluki.Runtime.Extraction.Providers;
 using Aluki.Runtime.Memory;
+using Aluki.Runtime.Memory.Chat;
+using Aluki.Runtime.Memory.Recall;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -18,17 +24,23 @@ public sealed class ConversationalResponseAgentContractTests
     private static ConversationalResponseAgent BuildAgent(
         IWhatsAppMessenger? messenger = null,
         IOutboundMessageStore? outboundStore = null,
-        ConversationOptions? options = null)
+        ConversationOptions? options = null,
+        IMetaMediaClient? mediaClient = null,
+        ITranscriptionProvider? transcriptionProvider = null,
+        IChatModelRouter? chatRouter = null,
+        IMemoryRecallService? recallService = null)
     {
         return new ConversationalResponseAgent(
             ingestionSink: null!,
             feedbackSink: null!,
-            recallService: null!,
-            chatRouter: null!,
+            recallService: recallService ?? new StubMemoryRecallService(),
+            chatRouter: chatRouter ?? null!,
             messenger: messenger ?? new StubWhatsAppMessenger(),
             historyStore: new StubConversationHistoryStore(),
             outboundStore: outboundStore ?? new StubOutboundMessageStore(),
             promptBuilder: new ConversationPromptBuilder(),
+            mediaClient: mediaClient ?? new StubMetaMediaClient(shouldThrow: true),
+            transcriptionProvider: transcriptionProvider ?? new StubTranscriptionProvider(null),
             options: Options.Create(options ?? new ConversationOptions()),
             logger: NullLogger<ConversationalResponseAgent>.Instance);
     }
@@ -112,13 +124,14 @@ public sealed class ConversationalResponseAgentContractTests
         Assert.False(agent.ClaimsIntent(message, MakePrincipal()));
     }
 
-    // ── HandleAsync — audio path (US3) ────────────────────────────────────────
+    // ── HandleAsync — audio path ──────────────────────────────────────────────
 
     [Fact]
-    public async Task HandleAsync_Audio_message_sends_acknowledgment_and_returns_audio_acknowledged()
+    public async Task HandleAsync_Audio_transcription_failure_sends_ack_then_retry_prompt()
     {
         var messenger = new StubWhatsAppMessenger();
         var outboundStore = new StubOutboundMessageStore();
+        // Default mediaClient throws → transcription fails
         var agent = BuildAgent(messenger, outboundStore);
 
         var audioRef = new UnifiedMediaRef("audio-id", "audio", null, null);
@@ -126,24 +139,57 @@ public sealed class ConversationalResponseAgentContractTests
 
         var result = await agent.HandleAsync(message, MakePrincipal(), CancellationToken.None);
 
-        Assert.True(result.Success);
-        Assert.Equal("audio_acknowledged", result.OutcomeCode);
-        Assert.Equal(1, messenger.SendCount);
+        Assert.False(result.Success);
+        Assert.Equal("audio_transcription_failed", result.OutcomeCode);
+        Assert.Equal(2, messenger.SendCount);    // acknowledgment + retry prompt
+        Assert.Equal(2, outboundStore.PersistCount);
     }
 
     [Fact]
-    public async Task HandleAsync_Audio_message_persists_outbound_record()
+    public async Task HandleAsync_Audio_successful_transcription_proceeds_past_acknowledgment()
     {
         var messenger = new StubWhatsAppMessenger();
-        var outboundStore = new StubOutboundMessageStore();
-        var agent = BuildAgent(messenger, outboundStore);
+        var agent = BuildAgent(
+            messenger,
+            mediaClient: new StubMetaMediaClient(shouldThrow: false),
+            transcriptionProvider: new StubTranscriptionProvider("hola mundo"));
 
         var audioRef = new UnifiedMediaRef("audio-id", "audio", null, null);
         var message = MakeWhatsAppMessage(text: null, mediaRefs: [audioRef]);
 
         await agent.HandleAsync(message, MakePrincipal(), CancellationToken.None);
 
-        Assert.Equal(1, outboundStore.PersistCount);
+        // At least 2 sends: acknowledgment + LLM response (or fallback since chatRouter is null)
+        Assert.True(messenger.SendCount >= 2);
+    }
+
+    [Fact]
+    public async Task HandleAsync_Audio_full_flow_ack_transcribe_llm_respond()
+    {
+        // Simulates the complete real flow without any external services:
+        // audio arrives → ack sent → downloaded (stub) → transcribed (stub "recuérdame mañana")
+        // → LLM responds (stub "Listo, ¿a qué hora?") → second message sent to user
+        var messenger = new StubWhatsAppMessenger();
+        var outboundStore = new StubOutboundMessageStore();
+        const string transcribedText = "recuérdame mañana";
+        const string llmReply = "Listo, ¿a qué hora quieres el recordatorio?";
+
+        var agent = BuildAgent(
+            messenger, outboundStore,
+            mediaClient: new StubMetaMediaClient(shouldThrow: false),
+            transcriptionProvider: new StubTranscriptionProvider(transcribedText),
+            chatRouter: new StubChatModelRouter(llmReply));
+
+        var audioRef = new UnifiedMediaRef("provider-media-id-123", "audio", "audio/ogg", 8000);
+        var message = MakeWhatsAppMessage(text: null, mediaRefs: [audioRef]);
+
+        var result = await agent.HandleAsync(message, MakePrincipal(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("responded", result.OutcomeCode);
+        Assert.Equal(2, messenger.SendCount);                          // ack + llm reply
+        Assert.Equal(2, outboundStore.PersistCount);
+        Assert.Equal(llmReply, outboundStore.LastMessage?.Body);       // LLM reply was sent
     }
 
     // ── HandleAsync — empty text (skip path) ─────────────────────────────────
@@ -233,4 +279,43 @@ file sealed class StubConversationHistoryStore : IConversationHistoryStore
     public Task<IReadOnlyList<ConversationTurn>> GetRecentAsync(
         Guid tenantId, Guid userId, int limit, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<ConversationTurn>>([]);
+}
+
+file sealed class StubMetaMediaClient(bool shouldThrow) : IMetaMediaClient
+{
+    public Task<MetaMediaContent> DownloadAsync(string providerMediaId, CancellationToken cancellationToken)
+    {
+        if (shouldThrow)
+            throw new InvalidOperationException("Stub: media download disabled.");
+        return Task.FromResult(new MetaMediaContent([], "audio/ogg", 0));
+    }
+}
+
+file sealed class StubTranscriptionProvider(string? text) : ITranscriptionProvider
+{
+    public Task<TranscriptionOutput> TranscribeAsync(
+        byte[] audio, string encoding, string? languageHint, CancellationToken cancellationToken)
+        => Task.FromResult(new TranscriptionOutput(
+            FullTranscription: text ?? string.Empty,
+            Segments: [],
+            AudioDurationMs: 0,
+            ModelInfo: new ModelInfo("Stub", "stub", "v0")));
+}
+
+file sealed class StubChatModelRouter(string reply) : IChatModelRouter
+{
+    public string? LastUserPrompt { get; private set; }
+
+    public Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
+    {
+        LastUserPrompt = userPrompt;
+        return Task.FromResult(reply);
+    }
+}
+
+file sealed class StubMemoryRecallService : IMemoryRecallService
+{
+    public Task<MemoryRecallOutcome> RecallAsync(
+        PrincipalScope principal, string queryText, string correlationId, CancellationToken cancellationToken)
+        => Task.FromResult(new MemoryRecallOutcome(MemoryStatus.NoResult, null!));
 }

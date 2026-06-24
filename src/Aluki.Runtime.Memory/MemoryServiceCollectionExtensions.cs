@@ -32,6 +32,7 @@ public static class MemoryServiceCollectionExtensions
         services.AddSingleton<TopicGroupingSkill>();
         services.AddSingleton<MemoryRecallResponseAssembler>();
         services.AddSingleton<MemoryRecallService>();
+        services.AddSingleton<IMemoryRecallService>(sp => sp.GetRequiredService<MemoryRecallService>());
         services.AddSingleton<MemoryInteractionCoordinator>();
 
         // Replace the capture pipeline's no-op bridge with the real sink so captured
