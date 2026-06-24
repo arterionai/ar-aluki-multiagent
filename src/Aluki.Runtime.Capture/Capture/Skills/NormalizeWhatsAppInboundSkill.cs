@@ -1,6 +1,7 @@
 using Aluki.Runtime.Abstractions.Channels.WhatsApp;
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Skills;
+using System.Linq;
 
 namespace Aluki.Runtime.Capture.Skills;
 
@@ -76,6 +77,14 @@ public sealed class NormalizeWhatsAppInboundSkill : CaptureSkill
                 FileSizeBytes: m.ByteLength) }
             : Array.Empty<UnifiedMediaRef>();
 
+        IReadOnlyList<UnifiedContactRef>? contactRefs = null;
+        if (envelope.Payload.ContactCards is { Count: > 0 } cards)
+        {
+            contactRefs = cards
+                .Select(c => new UnifiedContactRef(c.DisplayName, c.WaId, c.Phones ?? Array.Empty<string>()))
+                .ToArray();
+        }
+
         return new UnifiedMessage(
             MessageId: envelope.ProviderMessageId,
             ChannelType: ChannelType.WhatsApp,
@@ -84,7 +93,8 @@ public sealed class NormalizeWhatsAppInboundSkill : CaptureSkill
             ReceivedAtUtc: envelope.OccurredAtUtc,
             CorrelationId: correlationId,
             SenderExternalId: envelope.Sender.ExternalUserId,
-            PhoneNumberId: envelope.PhoneNumberId);
+            PhoneNumberId: envelope.PhoneNumberId,
+            ContactRefs: contactRefs);
     }
 
     private static string NormalizeMediaType(string? declared, string payloadType)

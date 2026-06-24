@@ -12,7 +12,8 @@ public sealed record UnifiedMessage(
     DateTimeOffset ReceivedAtUtc,
     string? CorrelationId = null,
     string? SenderExternalId = null,
-    string? PhoneNumberId = null);
+    string? PhoneNumberId = null,
+    IReadOnlyList<UnifiedContactRef>? ContactRefs = null);
 
 /// <summary>Reference to a media artifact attached to a <see cref="UnifiedMessage"/>.</summary>
 public sealed record UnifiedMediaRef(
@@ -20,6 +21,12 @@ public sealed record UnifiedMediaRef(
     string MediaKind,
     string? MimeType,
     long? FileSizeBytes);
+
+/// <summary>A contact card attached to a <see cref="UnifiedMessage"/>. <c>WaId</c> is canonical when present.</summary>
+public sealed record UnifiedContactRef(
+    string? DisplayName,
+    string? WaId,
+    IReadOnlyList<string> Phones);
 
 public static class ChannelType
 {

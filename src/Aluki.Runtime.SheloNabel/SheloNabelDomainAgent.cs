@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Linq;
 using Aluki.Runtime.Abstractions.Conversation;
 using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
@@ -166,6 +167,14 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
                 phoneNumberId, recipientWaId, correlationId, ct);
         }
 
+        // --- Contact card: vCard attachment → add-member intent ---
+        if (message.ContactRefs is { Count: > 0 })
+        {
+            return await ProcessTextAsync(
+                string.Empty, message, principal, scope,
+                phoneNumberId, recipientWaId, correlationId, ct);
+        }
+
         // --- Text ---
         var text = message.Text;
         if (string.IsNullOrWhiteSpace(text))
@@ -219,10 +228,12 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
             _ = Task.Run(() => IngestAsync(text, message, principal, correlationId), CancellationToken.None);
 
             // --- Path 0: Add member to Sheló tenant (OWNER only) ---
-            if (principal.Roles.Contains("OWNER") && SheloNabelAddMemberDetector.LooksLikeAddMember(text))
+            // Triggers on text command ("agrega a +52...") OR contact card attachment.
+            if (principal.Roles.Contains("OWNER") &&
+                (message.ContactRefs is { Count: > 0 } || SheloNabelAddMemberDetector.LooksLikeAddMember(text)))
             {
                 return await HandleAddMemberAsync(
-                    text, principal, systemPrompt, history,
+                    text, message, principal, systemPrompt, history,
                     phoneNumberId, recipientWaId, correlationId,
                     timeoutCts.Token);
             }
@@ -594,6 +605,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
 
     private async Task<AgentHandleResult> HandleAddMemberAsync(
         string text,
+        UnifiedMessage message,
         PrincipalContext principal,
         string systemPrompt,
         IReadOnlyList<ConversationTurn> history,
@@ -602,20 +614,38 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
         string correlationId,
         CancellationToken ct)
     {
-        var rawPhone = SheloNabelAddMemberDetector.ExtractPhone(text);
+        string? rawPhone = null;
+
+        // Prefer wa_id from a shared contact card (already canonical from Meta).
+        if (message.ContactRefs is { Count: > 0 } refs)
+        {
+            var card = refs[0];
+            if (card.WaId is not null)
+            {
+                rawPhone = card.WaId;
+            }
+            else if (card.Phones.Count > 0)
+            {
+                var digits = new string(card.Phones[0].Where(char.IsDigit).ToArray());
+                rawPhone = SheloNabelAddMemberDetector.NormalizePhone(digits);
+            }
+        }
+
+        // Fall back to phone extracted from text (e.g. "agrega al 5532229412")
+        rawPhone ??= SheloNabelAddMemberDetector.ExtractPhone(text);
 
         if (string.IsNullOrWhiteSpace(rawPhone))
         {
             await SendResponseAsync(
                 phoneNumberId, recipientWaId,
-                "¿A qué número le doy acceso? Escríbelo así: +52 55 1234 5678 👌",
+                "¿A qué número le doy acceso? Escríbelo (ej: 55 3222 9412) o comparte el contacto de WhatsApp 👌",
                 principal, correlationId, CancellationToken.None);
             return new AgentHandleResult(true, OutcomeCode: "shelo_add_member_no_phone");
         }
 
-        // rawPhone has no '+' or spaces; rebuild the canonical phone string with '+'
-        var waId = rawPhone;                      // wa_id = digits only (Meta format)
-        var phone = "+" + rawPhone;               // E.164 for display / profile
+        // rawPhone = digits only (Meta wa_id format); phone = E.164 for display
+        var waId = rawPhone;
+        var phone = "+" + rawPhone;
 
         AddMemberOutcome outcome;
         try

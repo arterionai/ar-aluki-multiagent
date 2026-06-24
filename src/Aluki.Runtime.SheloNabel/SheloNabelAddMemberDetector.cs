@@ -24,12 +24,28 @@ internal static partial class SheloNabelAddMemberDetector
     public static bool LooksLikeAddMember(string text) =>
         Pattern().IsMatch(RemoveDiacritics(text));
 
-    /// <summary>Extracts the first phone-like digit sequence from the message.</summary>
+    /// <summary>
+    /// Extracts the first phone-like digit sequence from the message and normalizes it.
+    /// Returns digits only (no '+' or spaces), with country code prepended if needed.
+    /// </summary>
     public static string? ExtractPhone(string text)
     {
         var m = PhonePattern().Match(text);
         if (!m.Success) return null;
-        return m.Value.Replace(" ", "").Replace("-", "").TrimStart('+');
+        var digits = m.Value.Replace(" ", "").Replace("-", "").TrimStart('+');
+        return NormalizePhone(digits);
+    }
+
+    /// <summary>
+    /// Normalizes a digit-only phone string. Prepends Mexico country code (52) for
+    /// 10-digit numbers that lack a country code prefix.
+    /// </summary>
+    public static string NormalizePhone(string digits)
+    {
+        // 10-digit number = Mexican local format (e.g. 5532229412) → 525532229412
+        if (digits.Length == 10)
+            return "52" + digits;
+        return digits;
     }
 
     [GeneratedRegex(@"\+?[\d][\d\s\-]{6,15}")]

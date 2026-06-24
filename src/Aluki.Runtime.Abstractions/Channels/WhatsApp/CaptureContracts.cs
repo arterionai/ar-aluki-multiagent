@@ -35,12 +35,13 @@ public static class CapturePayloadType
     public const string Audio = "audio";
     public const string Document = "document";
     public const string Forwarded = "forwarded";
+    public const string Contact = "contact";
     public const string Unsupported = "unsupported";
 
     /// <summary>Media-bearing supported kinds whose binary can be downloaded.</summary>
     public static bool IsMedia(string? type) => type is Image or Audio or Document;
 
-    public static bool IsSupported(string? type) => type is Text or Image or Audio or Document or Forwarded;
+    public static bool IsSupported(string? type) => type is Text or Image or Audio or Document or Forwarded or Contact;
 
     public static bool IsKnown(string? type) => IsSupported(type) || type == Unsupported;
 }

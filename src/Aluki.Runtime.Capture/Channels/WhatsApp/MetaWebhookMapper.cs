@@ -144,6 +144,7 @@ public static class MetaWebhookMapper
         string? text = null;
         MediaMetadata? media = null;
         ForwardedMetadata? forwarded = null;
+        IReadOnlyList<WhatsAppContactCard>? contactCards = null;
 
         switch (rawType)
         {
@@ -174,8 +175,13 @@ public static class MetaWebhookMapper
                 text = message.TryGetProperty("document", out var d) ? GetString(d, "caption") : null;
                 break;
 
+            case "contacts":
+                payloadType = CapturePayloadType.Contact;
+                contactCards = MapContactCards(message);
+                break;
+
             default:
-                // document, video, sticker, location, contacts, interactive, button, system, etc.
+                // video, sticker, location, interactive, button, system, etc.
                 payloadType = CapturePayloadType.Unsupported;
                 break;
         }
@@ -185,7 +191,8 @@ public static class MetaWebhookMapper
             Text: text,
             Media: media,
             Forwarded: forwarded,
-            RawEnvelopeRef: providerMessageId);
+            RawEnvelopeRef: providerMessageId,
+            ContactCards: contactCards);
 
         return new WhatsAppInboundEnvelope(
             ProviderMessageId: providerMessageId!,
@@ -196,6 +203,37 @@ public static class MetaWebhookMapper
             OccurredAtUtc: ResolveTimestamp(message),
             CorrelationId: null,
             PhoneNumberId: phoneNumberId);
+    }
+
+    private static IReadOnlyList<WhatsAppContactCard> MapContactCards(JsonElement message)
+    {
+        if (!message.TryGetProperty("contacts", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return Array.Empty<WhatsAppContactCard>();
+
+        var cards = new List<WhatsAppContactCard>();
+        foreach (var c in arr.EnumerateArray())
+        {
+            var displayName = c.TryGetProperty("name", out var n)
+                ? GetString(n, "formatted_name")
+                : null;
+
+            string? waId = null;
+            var phones = new List<string>();
+
+            if (c.TryGetProperty("phones", out var phonesArr) && phonesArr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var p in phonesArr.EnumerateArray())
+                {
+                    if (waId is null) waId = GetString(p, "wa_id");
+                    var phone = GetString(p, "phone");
+                    if (phone is not null) phones.Add(phone);
+                }
+            }
+
+            cards.Add(new WhatsAppContactCard(displayName, waId, phones));
+        }
+
+        return cards;
     }
 
     private static MediaMetadata MapMedia(JsonElement message, string property, string mediaType)

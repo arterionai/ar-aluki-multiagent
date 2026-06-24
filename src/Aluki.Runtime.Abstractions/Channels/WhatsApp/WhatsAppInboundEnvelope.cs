@@ -28,7 +28,15 @@ public sealed record Payload(
     [property: JsonPropertyName("text")] string? Text,
     [property: JsonPropertyName("media")] MediaMetadata? Media,
     [property: JsonPropertyName("forwarded")] ForwardedMetadata? Forwarded,
-    [property: JsonPropertyName("raw_envelope_ref")] string? RawEnvelopeRef
+    [property: JsonPropertyName("raw_envelope_ref")] string? RawEnvelopeRef,
+    [property: JsonPropertyName("contact_cards")] IReadOnlyList<WhatsAppContactCard>? ContactCards = null
+);
+
+/// <summary>A contact card shared via WhatsApp. <c>WaId</c> is canonical when present (set by Meta).</summary>
+public sealed record WhatsAppContactCard(
+    [property: JsonPropertyName("display_name")] string? DisplayName,
+    [property: JsonPropertyName("wa_id")] string? WaId,
+    [property: JsonPropertyName("phones")] IReadOnlyList<string> Phones
 );
 
 public sealed record MediaMetadata(
