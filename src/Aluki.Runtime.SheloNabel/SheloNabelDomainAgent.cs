@@ -171,18 +171,28 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
 
         try
         {
-            // Load recent conversation history + semantic recall in parallel.
+            // Load history + two parallel recalls: (1) by current message, (2) by customer profile
+            // query so stored facts (skin type, age, purchase history) surface even when the
+            // current message doesn't semantically resemble them ("recomiéndame algo").
             var historyTask = _historyStore.GetRecentAsync(
                 principal.TenantId, principal.UserId, limit: 10, timeoutCts.Token);
             var recallTask = _recallService.RecallAsync(
                 scope, text, correlationId, timeoutCts.Token);
+            var profileRecallTask = _recallService.RecallAsync(
+                scope,
+                "perfil cliente nombre tipo piel edad historial compras productos preferencias",
+                correlationId + "_profile",
+                timeoutCts.Token);
 
-            await Task.WhenAll(historyTask, recallTask);
+            await Task.WhenAll(historyTask, recallTask, profileRecallTask);
 
             var history = historyTask.Result;
             var recallOutcome = recallTask.Result;
+            var profileOutcome = profileRecallTask.Result;
+
             var recall = recallOutcome.Status != MemoryStatus.NoResult ? recallOutcome.Recall : null;
-            var customerMemory = BuildCustomerMemoryText(recall);
+            var profileRecall = profileOutcome.Status != MemoryStatus.NoResult ? profileOutcome.Recall : null;
+            var customerMemory = BuildCustomerMemoryText(recall, profileRecall);
             var systemPrompt = _promptBuilder.BuildSystemPrompt(customerMemory);
 
             // Best-effort ingest so new customer info mentioned is saved for future queries.
@@ -471,10 +481,23 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
         }
     }
 
-    private static string? BuildCustomerMemoryText(RecallResult? recall)
+    private static string? BuildCustomerMemoryText(RecallResult? recall, RecallResult? profileRecall)
     {
-        if (recall?.Claims is not { Count: > 0 } claims) return null;
-        return string.Join("\n", claims.Select(c => $"- {c.Text}"));
+        // Merge claims from both recalls, deduplicated by text.
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var lines = new List<string>();
+
+        foreach (var source in new[] { profileRecall, recall })
+        {
+            if (source?.Claims is not { Count: > 0 } claims) continue;
+            foreach (var claim in claims)
+            {
+                if (seen.Add(claim.Text))
+                    lines.Add($"- {claim.Text}");
+            }
+        }
+
+        return lines.Count > 0 ? string.Join("\n", lines) : null;
     }
 
     private static string BuildReminderConfirmation(
