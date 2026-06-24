@@ -80,8 +80,9 @@ public static class CaptureServiceCollectionExtensions
         services.AddSingleton<WhatsAppCaptureCoordinator>();
         services.AddSingleton<IAgentCoordinator>(sp => sp.GetRequiredService<WhatsAppCaptureCoordinator>());
 
-        // Domain agent dispatch (SB-009B)
+        // Domain agent dispatch (SB-009B) + retry queue
         services.AddSingleton<IDispatchAuditStore, DispatchAuditStore>();
+        services.AddSingleton<IDispatchRetryQueue, DispatchRetryQueue>();
         services.AddSingleton<IMessageDispatcher, MessageDispatcher>();
 
         return services;

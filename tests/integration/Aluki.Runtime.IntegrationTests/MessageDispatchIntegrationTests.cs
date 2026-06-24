@@ -41,7 +41,7 @@ public sealed class MessageDispatchIntegrationTests
             CorrelationId: Guid.NewGuid().ToString("N"));
 
     private MessageDispatcher BuildDispatcher(IDispatchAuditStore store, params IDomainAgent[] agents) =>
-        new(agents, store, NullLogger<MessageDispatcher>.Instance);
+        new(agents, store, new NullDispatchRetryQueue(), NullLogger<MessageDispatcher>.Instance);
 
     [Fact]
     public async Task Dispatch_audit_row_persisted_for_dispatched_outcome()

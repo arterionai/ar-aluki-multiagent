@@ -19,7 +19,7 @@ public sealed class MessageDispatcherContractTests
             CorrelationId: Guid.NewGuid().ToString("N"));
 
     private static MessageDispatcher Build(params IDomainAgent[] agents) =>
-        new(agents, new StubDispatchAuditStore(), NullLogger<MessageDispatcher>.Instance);
+        new(agents, new StubDispatchAuditStore(), new NullDispatchRetryQueue(), NullLogger<MessageDispatcher>.Instance);
 
     [Fact]
     public async Task Single_claiming_agent_is_selected()
@@ -105,6 +105,7 @@ public sealed class MessageDispatcherContractTests
         var dispatcher = new MessageDispatcher(
             [new StubDomainAgent("a.agent", priority: 10, claims: true)],
             store,
+            new NullDispatchRetryQueue(),
             NullLogger<MessageDispatcher>.Instance);
 
         var result = await dispatcher.DispatchAsync(MakeMessage(), MakePrincipal(), CancellationToken.None);
