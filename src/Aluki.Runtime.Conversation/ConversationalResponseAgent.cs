@@ -138,6 +138,21 @@ public sealed class ConversationalResponseAgent : IDomainAgent
                 phoneNumberId, recipientWaId, correlationId, ct);
         }
 
+        // --- Image messages: acknowledge, no LLM call ---
+        var isImage = message.MediaRefs.Count > 0
+                      && message.MediaRefs.Any(r => r.MediaKind == "image");
+        if (isImage)
+        {
+            await SendResponseAsync(
+                phoneNumberId, recipientWaId,
+                _options.ImageAcknowledgmentMessage,
+                OutboundStatus.Delivered,
+                errorReason: null,
+                principal, correlationId, ct);
+
+            return new AgentHandleResult(true, OutcomeCode: "image_acknowledged");
+        }
+
         // --- Text messages ---
         var text = message.Text;
         if (string.IsNullOrWhiteSpace(text))

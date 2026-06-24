@@ -10,6 +10,8 @@ public sealed class ConversationOptions
         "Tuve un problema procesando tu mensaje, inténtalo de nuevo 🙏";
     public string AudioAcknowledgmentMessage { get; set; } =
         "¡Perfecto! Ahora escucho tu audio y en breve te respondo 🎧";
+    public string ImageAcknowledgmentMessage { get; set; } =
+        "📷 ¡Recibí tu imagen! Por ahora solo proceso texto y audio. Pronto podré analizar imágenes también 🚀";
     public string NoMemoryMessageSuffix { get; set; } =
         " Si quieres, compárteme esa información y la guardo para ti.";
 
