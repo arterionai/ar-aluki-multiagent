@@ -1,6 +1,7 @@
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Capture.Media;
 using Aluki.Runtime.Extraction.Providers;
+using Aluki.Runtime.Host.Skills.Tenancy;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -22,6 +23,9 @@ public static class SheloNabelServiceCollectionExtensions
         // Fallback stubs — overridden by real registrations in Functions (registered before this call).
         services.TryAddSingleton<IMetaMediaClient, NullMetaMediaClient>();
         services.TryAddSingleton<ITranscriptionProvider, NullTranscriptionProvider>();
+
+        // Generic tenancy layer (channel routing, sub-tenants, member assignments).
+        services.AddTenancy();
 
         services.AddSingleton<SheloNabelPromptBuilder>();
         services.AddSingleton<SheloNabelCrmService>();

@@ -1,19 +1,27 @@
 using Aluki.Runtime.Capture.Persistence;
+using Aluki.Runtime.Host.Skills.Tenancy;
 using Npgsql;
 
 namespace Aluki.Runtime.SheloNabel;
 
 /// <summary>
-/// Data access layer for Sheló NABEL CRM features:
-/// - Sales report (reorder reminders created/delivered in the org tenant)
-/// - Pending reorder campaign (due reminders with whatsapp delivery channel)
-/// - Vendedora assignment (insert into vendedora_assignments)
+/// Sheló NABEL–specific CRM queries:
+/// - Sales / reorder report (reminders created in the org tenant)
+/// - Pending reorder campaign items (due reminders with whatsapp channel)
+///
+/// Generic tenancy operations (channel routing, sub-tenants, member assignment)
+/// are in <see cref="TenancyRepository"/> and available to any org tenant.
 /// </summary>
 public sealed class SheloNabelCrmService
 {
     private readonly NpgsqlConnectionFactory _db;
+    public readonly TenancyRepository Tenancy;
 
-    public SheloNabelCrmService(NpgsqlConnectionFactory db) => _db = db;
+    public SheloNabelCrmService(NpgsqlConnectionFactory db, TenancyRepository tenancy)
+    {
+        _db = db;
+        Tenancy = tenancy;
+    }
 
     // -------------------------------------------------------------------------
     // Sales report: reorder reminders created in the last N days for a tenant.
@@ -110,82 +118,6 @@ public sealed class SheloNabelCrmService
 
         return items;
     }
-
-    // -------------------------------------------------------------------------
-    // Vendedora assignment
-    // -------------------------------------------------------------------------
-
-    public async Task<AssignmentResult> AssignClientAsync(
-        Guid tenantId,
-        Guid ownerUserId,
-        string clientExternalId,
-        string? assignedToWaId,
-        string? notes,
-        CancellationToken ct)
-    {
-        await using var conn = await _db.OpenAsync(ct);
-
-        Guid? assignedUserId = null;
-        if (assignedToWaId is not null)
-        {
-            await using var findCmd = new NpgsqlCommand(
-                "select id from users_profile where external_auth_id = @waid limit 1;",
-                conn);
-            findCmd.Parameters.AddWithValue("waid", assignedToWaId);
-            var found = await findCmd.ExecuteScalarAsync(ct);
-            if (found is Guid g) assignedUserId = g;
-        }
-
-        await using var upsert = new NpgsqlCommand(
-            """
-            insert into vendedora_assignments
-                (tenant_id, owner_user_id, client_external_id, assigned_to_user_id, assigned_to_wa_id, notes)
-            values (@tenant, @owner, @client, @assigned, @waId, @notes)
-            on conflict (tenant_id, client_external_id) do update
-                set assigned_to_user_id = excluded.assigned_to_user_id,
-                    assigned_to_wa_id   = excluded.assigned_to_wa_id,
-                    notes               = coalesce(excluded.notes, vendedora_assignments.notes),
-                    updated_at          = now(),
-                    status              = 'active';
-            """,
-            conn);
-        upsert.Parameters.AddWithValue("tenant", tenantId);
-        upsert.Parameters.AddWithValue("owner", ownerUserId);
-        upsert.Parameters.AddWithValue("client", clientExternalId);
-        upsert.Parameters.AddWithValue("assigned", assignedUserId.HasValue ? (object)assignedUserId.Value : DBNull.Value);
-        upsert.Parameters.AddWithValue("waId", assignedToWaId is not null ? (object)assignedToWaId : DBNull.Value);
-        upsert.Parameters.AddWithValue("notes", notes is not null ? (object)notes : DBNull.Value);
-        await upsert.ExecuteNonQueryAsync(ct);
-
-        return new AssignmentResult(clientExternalId, assignedToWaId, assignedUserId);
-    }
-
-    // -------------------------------------------------------------------------
-    // Channel registration: register a WA business phone_number_id → tenant
-    // -------------------------------------------------------------------------
-
-    public async Task RegisterChannelAsync(
-        string phoneNumberId,
-        Guid tenantId,
-        string? displayName,
-        CancellationToken ct)
-    {
-        await using var conn = await _db.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            """
-            insert into tenant_whatsapp_channels (phone_number_id, tenant_id, display_name)
-            values (@phone, @tenant, @name)
-            on conflict (phone_number_id) do update
-                set tenant_id    = excluded.tenant_id,
-                    display_name = coalesce(excluded.display_name, tenant_whatsapp_channels.display_name),
-                    status       = 'active';
-            """,
-            conn);
-        cmd.Parameters.AddWithValue("phone", phoneNumberId);
-        cmd.Parameters.AddWithValue("tenant", tenantId);
-        cmd.Parameters.AddWithValue("name", displayName is not null ? (object)displayName : DBNull.Value);
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
 }
 
 public sealed record ReorderReminderRow(
@@ -210,6 +142,8 @@ public sealed record PendingReorderItem(
     string? WaId,
     DateTimeOffset ScheduledUtc);
 
+// Re-export from TenancyRepository so callers inside this namespace don't need
+// an extra using for the generic type.
 public sealed record AssignmentResult(
     string ClientExternalId,
     string? AssignedToWaId,

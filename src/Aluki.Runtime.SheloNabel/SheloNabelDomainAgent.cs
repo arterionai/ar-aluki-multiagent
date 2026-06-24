@@ -551,13 +551,18 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
         var clientId = assignedWaId ?? recipientWaId;
         var assignedTo = assignedWaId;
 
-        var result = await _crmService.AssignClientAsync(
+        var assignment = await _crmService.Tenancy.AssignContactAsync(
             tenantId: principal.TenantId,
             ownerUserId: principal.UserId,
             clientExternalId: clientId,
             assignedToWaId: assignedTo,
             notes: text,
             ct);
+
+        var result = new AssignmentResult(
+            assignment.ClientExternalId,
+            assignment.AssignedToWaId,
+            assignment.AssignedToUserId);
 
         var userPrompt = _promptBuilder.BuildAssignmentUserPrompt(text, result, history);
         var response = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, ct);
