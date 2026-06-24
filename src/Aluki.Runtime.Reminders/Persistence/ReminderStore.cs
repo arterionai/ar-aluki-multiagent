@@ -75,7 +75,9 @@ public sealed class ReminderStore
         {
             read.Parameters.AddWithValue("tenant", principal.TenantId);
             await using var reader = await read.ExecuteReaderAsync(cancellationToken);
-            await reader.ReadAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+                throw new InvalidOperationException(
+                    $"reminder_quotas row not found for tenant {principal.TenantId} after upsert.");
             limit = reader.GetInt32(0);
             tier = reader.GetString(1);
         }
@@ -149,7 +151,9 @@ public sealed class ReminderStore
             command.Parameters.AddWithValue("correlation", correlationId);
 
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            await reader.ReadAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+                throw new InvalidOperationException(
+                    "INSERT INTO reminders RETURNING clause produced no row.");
             creation = new ReminderCreation(reader.GetGuid(0), reader.GetBoolean(2), reader.GetString(1));
         }
 

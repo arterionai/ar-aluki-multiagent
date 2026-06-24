@@ -61,12 +61,15 @@ public sealed class ReminderDomainAgent : IDomainAgent
         var correlationId = message.CorrelationId ?? message.MessageId;
         var text = message.Text ?? string.Empty;
 
+        // Declared outside the try block so it can be included in catch-block diagnostics.
+        ReminderParseResult? parsed = null;
+
         try
         {
             // Resolve user's timezone from memory (best-effort — falls back to default).
-            var userTimezone = await ResolveUserTimezoneAsync(principal, correlationId, ct);
+            var (userTimezone, timezoneFromMemory) = await ResolveUserTimezoneAsync(principal, correlationId, ct);
 
-            var parsed = await _parser.ParseAsync(text, DateTimeOffset.UtcNow, userTimezone, ct);
+            parsed = await _parser.ParseAsync(text, DateTimeOffset.UtcNow, userTimezone, ct);
 
             if (!parsed.Success || parsed.ScheduledTimeUtc is null)
             {
@@ -100,6 +103,8 @@ public sealed class ReminderDomainAgent : IDomainAgent
             if (result.StatusCode is 200 or 201)
             {
                 reply = BuildConfirmation(parsed.ReminderText!, parsed.ScheduledTimeUtc!.Value, userTimezone);
+                if (!timezoneFromMemory)
+                    reply += "\n\n¿En qué ciudad vives? Así podré enviarte los próximos recordatorios a la hora local correcta. 🌎";
             }
             else if (result.StatusCode == 409)
             {
@@ -108,9 +113,20 @@ public sealed class ReminderDomainAgent : IDomainAgent
             else
             {
                 _logger.LogWarning(
-                    "ReminderDomainAgent: CreateAsync returned {StatusCode}. correlation_id={CorrelationId}",
-                    result.StatusCode, correlationId);
-                reply = "No pude crear el recordatorio en este momento. Inténtalo de nuevo. 🙏";
+                    "ReminderDomainAgent: CreateAsync returned {StatusCode}. "
+                    + "parsed_text={ParsedText} scheduled_utc={ScheduledUtc} now_utc={NowUtc} correlation_id={CorrelationId}",
+                    result.StatusCode,
+                    parsed.ReminderText,
+                    parsed.ScheduledTimeUtc,
+                    DateTimeOffset.UtcNow,
+                    correlationId);
+
+                // When the API rejected the scheduled time as past (likely the LLM returned
+                // the wrong year), give the user a specific, actionable message.
+                reply = result.StatusCode == 400 && parsed.ScheduledTimeUtc < DateTimeOffset.UtcNow
+                    ? "La fecha que mencionaste ya pasó. ¿Puedes confirmar el año? "
+                      + "Por ejemplo: «recuérdame el 1 de julio de 2026 a las 9am» 📅"
+                    : "No pude crear el recordatorio en este momento. Inténtalo de nuevo. 🙏";
             }
 
             await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, reply, ct);
@@ -122,8 +138,11 @@ public sealed class ReminderDomainAgent : IDomainAgent
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "ReminderDomainAgent failed. message_id={MessageId} correlation_id={CorrelationId}",
-                message.MessageId, correlationId);
+                "ReminderDomainAgent failed. "
+                + "message_id={MessageId} correlation_id={CorrelationId} "
+                + "parsed_text={ParsedText} scheduled_utc={ScheduledUtc}",
+                message.MessageId, correlationId,
+                parsed?.ReminderText, parsed?.ScheduledTimeUtc);
 
             // Graceful degradation: CancellationToken.None so the fallback is never skipped
             // if a timeout on the LLM parse fired and cancelled ct.
@@ -136,7 +155,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
         }
     }
 
-    private async Task<string> ResolveUserTimezoneAsync(
+    private async Task<(string Timezone, bool FromMemory)> ResolveUserTimezoneAsync(
         PrincipalContext principal,
         string correlationId,
         CancellationToken ct)
@@ -167,7 +186,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
                     _logger.LogInformation(
                         "ReminderDomainAgent: resolved timezone {Timezone} from memory. correlation_id={CorrelationId}",
                         tz, correlationId);
-                    return tz;
+                    return (tz, true);
                 }
             }
         }
@@ -178,7 +197,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
                 correlationId);
         }
 
-        return DefaultTimezone;
+        return (DefaultTimezone, false);
     }
 
     private static string BuildConfirmation(string reminderText, DateTimeOffset scheduledUtc, string timezone)

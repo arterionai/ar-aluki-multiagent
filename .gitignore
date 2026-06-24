@@ -1,4 +1,5 @@
 bin/
 obj/
 .vs/
-.claude/
+.claude/transcripts/
+.claude/settings.local.json

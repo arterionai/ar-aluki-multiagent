@@ -27,8 +27,11 @@ public sealed class ReminderIntentParser
            Interpret relative expressions ("en 2 minutos", "en 1 hora", "mañana a las 3pm",
            "in 5 minutes") relative to the current UTC time provided in the user prompt.
            Default local timezone for expressions without an explicit timezone: {0}.
+           IMPORTANT: The scheduled time MUST be in the future relative to the current UTC
+           time. Pay close attention to the YEAR in the current UTC time — always use the
+           current year or a future year, never a past year.
 
-        Respond ONLY with a JSON object: {"reminder_text": "...", "scheduled_time_utc": "..."}
+        Respond ONLY with a JSON object: {{"reminder_text": "...", "scheduled_time_utc": "..."}}
         If you cannot determine a clear future time, set "scheduled_time_utc" to null.
         Do not include markdown fences or any other text.
         """;
