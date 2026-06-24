@@ -11,9 +11,13 @@ public sealed class SheloNabelOptions
     /// <summary>
     /// Comma-separated list of WhatsApp wa_ids (no '+') authorized to use
     /// the Sheló NABEL agent. Defaults to the two demo numbers.
+    /// Mexican mobile numbers appear in two formats in Meta's API:
+    ///   52XXXXXXXXXX  (current, 12 digits) or
+    ///   521XXXXXXXXX  (legacy pre-2019, 13 digits — the extra '1' after country code)
+    /// Both variants are included so either format is accepted.
     /// </summary>
     public string AuthorizedWaIds { get; set; } =
-        "14252307522,525528571249";
+        "14252307522,525528571249,5215528571249";
 
     internal IReadOnlySet<string> ParsedWaIds()
     {
