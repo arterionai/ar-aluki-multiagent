@@ -4,11 +4,14 @@ using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Capture.Channels.WhatsApp;
+using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Capture.Media;
 using Aluki.Runtime.Conversation;
 using Aluki.Runtime.Extraction;
 using Aluki.Runtime.Extraction.Providers;
 using Aluki.Runtime.Memory;
+using Aluki.Runtime.Memory.Chat;
+using Aluki.Runtime.Memory.Recall;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -23,13 +26,15 @@ public sealed class ConversationalResponseAgentContractTests
         IOutboundMessageStore? outboundStore = null,
         ConversationOptions? options = null,
         IMetaMediaClient? mediaClient = null,
-        ITranscriptionProvider? transcriptionProvider = null)
+        ITranscriptionProvider? transcriptionProvider = null,
+        IChatModelRouter? chatRouter = null,
+        IMemoryRecallService? recallService = null)
     {
         return new ConversationalResponseAgent(
             ingestionSink: null!,
             feedbackSink: null!,
-            recallService: null!,
-            chatRouter: null!,
+            recallService: recallService ?? new StubMemoryRecallService(),
+            chatRouter: chatRouter ?? null!,
             messenger: messenger ?? new StubWhatsAppMessenger(),
             historyStore: new StubConversationHistoryStore(),
             outboundStore: outboundStore ?? new StubOutboundMessageStore(),
@@ -158,6 +163,35 @@ public sealed class ConversationalResponseAgentContractTests
         Assert.True(messenger.SendCount >= 2);
     }
 
+    [Fact]
+    public async Task HandleAsync_Audio_full_flow_ack_transcribe_llm_respond()
+    {
+        // Simulates the complete real flow without any external services:
+        // audio arrives → ack sent → downloaded (stub) → transcribed (stub "recuérdame mañana")
+        // → LLM responds (stub "Listo, ¿a qué hora?") → second message sent to user
+        var messenger = new StubWhatsAppMessenger();
+        var outboundStore = new StubOutboundMessageStore();
+        const string transcribedText = "recuérdame mañana";
+        const string llmReply = "Listo, ¿a qué hora quieres el recordatorio?";
+
+        var agent = BuildAgent(
+            messenger, outboundStore,
+            mediaClient: new StubMetaMediaClient(shouldThrow: false),
+            transcriptionProvider: new StubTranscriptionProvider(transcribedText),
+            chatRouter: new StubChatModelRouter(llmReply));
+
+        var audioRef = new UnifiedMediaRef("provider-media-id-123", "audio", "audio/ogg", 8000);
+        var message = MakeWhatsAppMessage(text: null, mediaRefs: [audioRef]);
+
+        var result = await agent.HandleAsync(message, MakePrincipal(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("responded", result.OutcomeCode);
+        Assert.Equal(2, messenger.SendCount);                          // ack + llm reply
+        Assert.Equal(2, outboundStore.PersistCount);
+        Assert.Equal(llmReply, outboundStore.LastMessage?.Body);       // LLM reply was sent
+    }
+
     // ── HandleAsync — empty text (skip path) ─────────────────────────────────
 
     [Fact]
@@ -266,4 +300,22 @@ file sealed class StubTranscriptionProvider(string? text) : ITranscriptionProvid
             Segments: [],
             AudioDurationMs: 0,
             ModelInfo: new ModelInfo("Stub", "stub", "v0")));
+}
+
+file sealed class StubChatModelRouter(string reply) : IChatModelRouter
+{
+    public string? LastUserPrompt { get; private set; }
+
+    public Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
+    {
+        LastUserPrompt = userPrompt;
+        return Task.FromResult(reply);
+    }
+}
+
+file sealed class StubMemoryRecallService : IMemoryRecallService
+{
+    public Task<MemoryRecallOutcome> RecallAsync(
+        PrincipalScope principal, string queryText, string correlationId, CancellationToken cancellationToken)
+        => Task.FromResult(new MemoryRecallOutcome(MemoryStatus.NoResult, null!));
 }

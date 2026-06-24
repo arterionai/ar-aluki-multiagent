@@ -25,7 +25,7 @@ public sealed class ConversationalResponseAgent : IDomainAgent
 
     private readonly IMemoryIngestionSink _ingestionSink;
     private readonly IFeedbackCaptureSink _feedbackSink;
-    private readonly MemoryRecallService _recallService;
+    private readonly IMemoryRecallService _recallService;
     private readonly IChatModelRouter _chatRouter;
     private readonly IWhatsAppMessenger _messenger;
     private readonly IConversationHistoryStore _historyStore;
@@ -39,7 +39,7 @@ public sealed class ConversationalResponseAgent : IDomainAgent
     public ConversationalResponseAgent(
         IMemoryIngestionSink ingestionSink,
         IFeedbackCaptureSink feedbackSink,
-        MemoryRecallService recallService,
+        IMemoryRecallService recallService,
         IChatModelRouter chatRouter,
         IWhatsAppMessenger messenger,
         IConversationHistoryStore historyStore,
