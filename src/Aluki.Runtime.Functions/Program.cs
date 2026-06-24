@@ -10,6 +10,7 @@ using Aluki.Runtime.Host.Skills.Governance;
 using Aluki.Runtime.Host.Skills.LinkCapture;
 using Aluki.Runtime.Host.Skills.SemanticGraph;
 using Aluki.Runtime.Host.Skills.SuggestionsAdmin;
+using Aluki.Runtime.Host.Skills.Tenancy;
 using Aluki.Runtime.Host.Skills.YouTubeLinks;
 using Aluki.Runtime.Conversation;
 using Aluki.Runtime.Memory;
@@ -36,6 +37,7 @@ var host = new HostBuilder()
         services.AddGovernance(context.Configuration);
         services.AddSemanticGraph(context.Configuration);
         services.AddBilling(context.Configuration);
+        services.AddTenancy();
 
         // Register real media client before AddConversationalResponse so the
         // TryAddSingleton fallback (NullMetaMediaClient) inside it is skipped.

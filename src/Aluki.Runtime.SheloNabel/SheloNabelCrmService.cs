@@ -148,3 +148,10 @@ public sealed record AssignmentResult(
     string ClientExternalId,
     string? AssignedToWaId,
     Guid? AssignedToUserId);
+
+public sealed record AddMemberOutcome(
+    bool Success,
+    string WaId,
+    string Role,
+    bool IsNew,
+    string? ErrorMessage = null);

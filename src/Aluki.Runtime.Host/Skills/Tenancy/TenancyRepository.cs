@@ -170,6 +170,109 @@ public sealed class TenancyRepository
 
         return rows;
     }
+
+    // -------------------------------------------------------------------------
+    // Add a new member to a tenant by wa_id.
+    // Creates users_profile + membership + DM context + context_access atomically.
+    // Fully idempotent: safe to call multiple times for the same wa_id.
+    // -------------------------------------------------------------------------
+
+    public async Task<AddMemberResult> AddMemberToTenantAsync(
+        Guid tenantId,
+        string waId,
+        string phone,
+        string role,
+        CancellationToken ct)
+    {
+        await using var conn = await _db.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        try
+        {
+            // 1. Upsert user profile
+            await using (var cmd = new NpgsqlCommand(
+                """
+                insert into users_profile (id, external_auth_id, phone)
+                values (gen_random_uuid(), @waid, @phone)
+                on conflict (external_auth_id) do nothing;
+                """, conn, tx))
+            {
+                cmd.Parameters.AddWithValue("waid", waId);
+                cmd.Parameters.AddWithValue("phone", phone);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+
+            Guid userId;
+            await using (var cmd = new NpgsqlCommand(
+                "select id from users_profile where external_auth_id = @waid;",
+                conn, tx))
+            {
+                cmd.Parameters.AddWithValue("waid", waId);
+                userId = (Guid)(await cmd.ExecuteScalarAsync(ct))!;
+            }
+
+            // 2. Upsert membership
+            bool isNew;
+            await using (var cmd = new NpgsqlCommand(
+                """
+                insert into memberships (tenant_id, user_id, role)
+                values (@tenant, @user, @role)
+                on conflict (tenant_id, user_id) do update set role = excluded.role
+                returning (xmax = 0) as is_new;
+                """, conn, tx))
+            {
+                cmd.Parameters.AddWithValue("tenant", tenantId);
+                cmd.Parameters.AddWithValue("user", userId);
+                cmd.Parameters.AddWithValue("role", role);
+                isNew = (bool)(await cmd.ExecuteScalarAsync(ct))!;
+            }
+
+            // 3. Upsert DM context
+            await using (var cmd = new NpgsqlCommand(
+                """
+                insert into contexts (id, tenant_id, context_type, external_context_id, title)
+                values (gen_random_uuid(), @tenant, 'DM', @waid, 'DM')
+                on conflict (tenant_id, context_type, external_context_id) do nothing;
+                """, conn, tx))
+            {
+                cmd.Parameters.AddWithValue("tenant", tenantId);
+                cmd.Parameters.AddWithValue("waid", waId);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+
+            Guid contextId;
+            await using (var cmd = new NpgsqlCommand(
+                """
+                select id from contexts
+                where tenant_id = @tenant and context_type = 'DM' and external_context_id = @waid;
+                """, conn, tx))
+            {
+                cmd.Parameters.AddWithValue("tenant", tenantId);
+                cmd.Parameters.AddWithValue("waid", waId);
+                contextId = (Guid)(await cmd.ExecuteScalarAsync(ct))!;
+            }
+
+            // 4. Upsert context_access
+            await using (var cmd = new NpgsqlCommand(
+                """
+                insert into context_access (context_id, user_id, access_role)
+                values (@ctx, @user, 'OWNER')
+                on conflict (context_id, user_id) do nothing;
+                """, conn, tx))
+            {
+                cmd.Parameters.AddWithValue("ctx", contextId);
+                cmd.Parameters.AddWithValue("user", userId);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+
+            await tx.CommitAsync(ct);
+            return new AddMemberResult(userId, tenantId, waId, role, isNew);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
+        }
+    }
 }
 
 public sealed record MemberAssignmentResult(
@@ -183,3 +286,10 @@ public sealed record MemberAssignmentRow(
     string? Phone,
     string? Notes,
     DateTimeOffset CreatedAt);
+
+public sealed record AddMemberResult(
+    Guid UserId,
+    Guid TenantId,
+    string WaId,
+    string Role,
+    bool IsNew);

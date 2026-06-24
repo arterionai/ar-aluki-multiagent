@@ -247,6 +247,27 @@ public sealed class SheloNabelPromptBuilder
         return sb.ToString().TrimEnd();
     }
 
+    public string BuildAddMemberUserPrompt(
+        string originalMessage,
+        AddMemberOutcome outcome,
+        IReadOnlyList<ConversationTurn>? history = null)
+    {
+        var sb = new System.Text.StringBuilder();
+        AppendHistory(sb, history);
+        sb.AppendLine("## Mensaje de Jaime");
+        sb.AppendLine(originalMessage);
+        sb.AppendLine();
+        sb.AppendLine("## Estado del sistema");
+        sb.AppendLine(outcome.Success
+            ? $"✅ {outcome.WaId} {(outcome.IsNew ? "agregado como nuevo miembro" : "ya era miembro, rol actualizado")} del equipo Sheló NABEL (rol: {outcome.Role})."
+            : $"⚠️ No se pudo agregar el número. {outcome.ErrorMessage}");
+        sb.AppendLine();
+        sb.AppendLine("## Tu tarea");
+        sb.AppendLine("Confirma de forma cálida si se agregó bien o informa el error. "
+            + "Si se agregó, recuérdale a Jaime que esa persona ya puede escribirle al número de Sheló NABEL y el agente los atenderá.");
+        return sb.ToString().TrimEnd();
+    }
+
     private static void AppendHistory(
         System.Text.StringBuilder sb,
         IReadOnlyList<ConversationTurn>? history)

@@ -40,6 +40,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
     private const int ReorderDays = 30;
 
     private readonly IReadOnlySet<string> _authorizedWaIds;
+    private readonly Guid _orgTenantId;
 
     private readonly ReminderService _reminderService;
     private readonly ReminderIntentParser _parser;
@@ -77,6 +78,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
         ILogger<SheloNabelDomainAgent> logger)
     {
         _authorizedWaIds = options.Value.ParsedWaIds();
+        _orgTenantId = options.Value.ParsedOrgTenantId();
         _reminderService = reminderService;
         _parser = parser;
         _recallService = recallService;
@@ -99,8 +101,14 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
     public bool ClaimsIntent(UnifiedMessage message, PrincipalContext principal)
         => message.ChannelType == ChannelType.WhatsApp
            && message.SenderExternalId is not null
-           && _authorizedWaIds.Contains(message.SenderExternalId)
-           && !string.IsNullOrWhiteSpace(message.PhoneNumberId);
+           && !string.IsNullOrWhiteSpace(message.PhoneNumberId)
+           && (
+               // Primary: user was resolved to the Sheló NABEL org tenant (DB-driven,
+               // works for anyone added via AddMemberToTenantAsync or the seed migration).
+               (_orgTenantId != Guid.Empty && principal.TenantId == _orgTenantId)
+               // Fallback: static wa_id list for bootstrap / before channel routing is set up.
+               || _authorizedWaIds.Contains(message.SenderExternalId)
+           );
 
     public async Task<AgentHandleResult> HandleAsync(
         UnifiedMessage message,
@@ -209,6 +217,15 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
 
             // Best-effort ingest so new customer info mentioned is saved for future queries.
             _ = Task.Run(() => IngestAsync(text, message, principal, correlationId), CancellationToken.None);
+
+            // --- Path 0: Add member to Sheló tenant (OWNER only) ---
+            if (principal.Roles.Contains("OWNER") && SheloNabelAddMemberDetector.LooksLikeAddMember(text))
+            {
+                return await HandleAddMemberAsync(
+                    text, principal, systemPrompt, history,
+                    phoneNumberId, recipientWaId, correlationId,
+                    timeoutCts.Token);
+            }
 
             // --- Path 1: Reminder intent — create reminder + product recommendations ---
             if (ReminderSchedulingDetector.LooksLikeReminder(text))
@@ -571,6 +588,70 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
 
         await SendResponseAsync(phoneNumberId, recipientWaId, response, principal, correlationId, CancellationToken.None);
         return new AgentHandleResult(true, OutcomeCode: "shelo_assignment");
+    }
+
+    // --- Add Member to Sheló Tenant ---
+
+    private async Task<AgentHandleResult> HandleAddMemberAsync(
+        string text,
+        PrincipalContext principal,
+        string systemPrompt,
+        IReadOnlyList<ConversationTurn> history,
+        string phoneNumberId,
+        string recipientWaId,
+        string correlationId,
+        CancellationToken ct)
+    {
+        var rawPhone = SheloNabelAddMemberDetector.ExtractPhone(text);
+
+        if (string.IsNullOrWhiteSpace(rawPhone))
+        {
+            await SendResponseAsync(
+                phoneNumberId, recipientWaId,
+                "¿A qué número le doy acceso? Escríbelo así: +52 55 1234 5678 👌",
+                principal, correlationId, CancellationToken.None);
+            return new AgentHandleResult(true, OutcomeCode: "shelo_add_member_no_phone");
+        }
+
+        // rawPhone has no '+' or spaces; rebuild the canonical phone string with '+'
+        var waId = rawPhone;                      // wa_id = digits only (Meta format)
+        var phone = "+" + rawPhone;               // E.164 for display / profile
+
+        AddMemberOutcome outcome;
+        try
+        {
+            var result = await _crmService.Tenancy.AddMemberToTenantAsync(
+                _orgTenantId, waId, phone, "MEMBER", ct);
+
+            outcome = new AddMemberOutcome(
+                Success: true,
+                WaId: result.WaId,
+                Role: result.Role,
+                IsNew: result.IsNew);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "SheloNabelDomainAgent: AddMemberToTenantAsync failed. waId={WaId}", waId);
+            outcome = new AddMemberOutcome(
+                Success: false,
+                WaId: waId,
+                Role: "MEMBER",
+                IsNew: false,
+                ErrorMessage: ex.Message);
+        }
+
+        var userPrompt = _promptBuilder.BuildAddMemberUserPrompt(text, outcome, history);
+        var response = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, ct);
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            response = outcome.Success
+                ? $"✅ {phone} {(outcome.IsNew ? "agregado al equipo" : "ya era miembro, rol actualizado")} como {outcome.Role}."
+                : $"⚠️ No pude agregar {phone}. {outcome.ErrorMessage}";
+        }
+
+        await SendResponseAsync(phoneNumberId, recipientWaId, response, principal, correlationId, CancellationToken.None);
+        return new AgentHandleResult(true, OutcomeCode: "shelo_add_member");
     }
 
     // --- Helpers ---
