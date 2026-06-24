@@ -54,6 +54,9 @@ public sealed class ReminderService
         var validation = ValidateCreate(request);
         if (validation is not null)
         {
+            _logger.LogInformation(
+                "reminder.validation_failed reason={Reason} correlation_id={CorrelationId}",
+                validation, correlationId);
             return BadRequest(correlationId, validation);
         }
 
@@ -85,7 +88,9 @@ public sealed class ReminderService
         var principal = ToScope(request.PrincipalContext!);
         if (!await _scopeGuard.IsAuthorizedAsync(principal, cancellationToken))
         {
-            _logger.LogWarning("reminder.scope_denied correlation_id={CorrelationId}", correlationId);
+            _logger.LogWarning(
+                "reminder.scope_denied tenant_id={TenantId} user_id={UserId} context_id={ContextId} correlation_id={CorrelationId}",
+                principal.TenantId, principal.UserId, principal.ContextId, correlationId);
             return ScopeDenied(correlationId);
         }
 
