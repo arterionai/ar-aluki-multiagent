@@ -7,6 +7,7 @@
     <Project Path="src/Aluki.Runtime.Extraction/Aluki.Runtime.Extraction.csproj" />
     <Project Path="src/Aluki.Runtime.Reminders/Aluki.Runtime.Reminders.csproj" />
     <Project Path="src/Aluki.Runtime.Conversation/Aluki.Runtime.Conversation.csproj" />
+    <Project Path="src/Aluki.Runtime.SheloNabel/Aluki.Runtime.SheloNabel.csproj" />
     <Project Path="src/Aluki.Runtime.DelegatedReminders/Aluki.Runtime.DelegatedReminders.csproj" />
     <Project Path="src/Aluki.Runtime.Functions/Aluki.Runtime.Functions.csproj" />
     <Project Path="src/Aluki.Runtime.Host/Aluki.Runtime.Host.csproj" />

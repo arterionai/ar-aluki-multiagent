@@ -13,6 +13,7 @@ using Aluki.Runtime.Host.Skills.SuggestionsAdmin;
 using Aluki.Runtime.Host.Skills.YouTubeLinks;
 using Aluki.Runtime.Conversation;
 using Aluki.Runtime.Memory;
+using Aluki.Runtime.SheloNabel;
 using Aluki.Runtime.DelegatedReminders;
 using Aluki.Runtime.Reminders;
 using Microsoft.Extensions.DependencyInjection;
@@ -46,6 +47,10 @@ var host = new HostBuilder()
         services.AddSingleton<MediaDownloadProcessor>();
 
         services.AddConversationalResponse(context.Configuration);
+
+        // Sheló NABEL sales assistant demo (priority 40, owner number only).
+        // Real media/transcription clients are already registered above via AddHttpClient.
+        services.AddSheloNabelAssistant();
     })
     .Build();
 
