@@ -25,6 +25,13 @@ public sealed class NullMediaDownloadQueue : IMediaDownloadQueue
     public Task EnqueueAsync(MediaDownloadJob job, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
+/// <summary>No-op media client used where Graph API download is not wired (e.g. the dev host).</summary>
+public sealed class NullMetaMediaClient : IMetaMediaClient
+{
+    public Task<MetaMediaContent> DownloadAsync(string providerMediaId, CancellationToken cancellationToken)
+        => throw new NotSupportedException("Media download is not configured in this environment.");
+}
+
 /// <summary>Downloaded media payload.</summary>
 public sealed record MetaMediaContent(byte[] Bytes, string ContentType, long ByteLength);
 
