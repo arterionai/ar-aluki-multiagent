@@ -48,12 +48,48 @@ jobs:
       - name: Fetch connection string from Key Vault
         shell: bash
         run: |
-          CONN=$(az keyvault secret show \
+          set -euo pipefail
+          CONN="$(az keyvault secret show \
             --vault-name "$KEYVAULT_NAME" \
             --name "$POSTGRES_SECRET_NAME" \
-            --query value -o tsv)
-          echo "CONN=$CONN" >> $GITHUB_ENV
+            --query value -o tsv)"
           echo "::add-mask::$CONN"
+
+          # Parse Npgsql ADO.NET connection string into libpq PG* env vars.
+          CONN_LINES="${CONN//;/$'\n'}"
+          while IFS= read -r pair; do
+            [ -z "$pair" ] && continue
+            key="$(printf '%s' "${pair%%=*}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            val="$(printf '%s' "${pair#*=}" | sed 's/^[[:space:]]*//')"
+            case "$key" in
+              host|server) PGHOST="$val" ;;
+              port) PGPORT="$val" ;;
+              database|"database name"|db) PGDATABASE="$val" ;;
+              username|"user id"|user|uid) PGUSER="$val" ;;
+              password|pwd) PGPASSWORD="$val" ;;
+              "ssl mode"|sslmode) PGSSLMODE_RAW="$val" ;;
+            esac
+          done <<< "$CONN_LINES"
+
+          : "${PGHOST:?missing Host}"
+          : "${PGDATABASE:?missing Database}"
+          : "${PGUSER:?missing Username}"
+          : "${PGPASSWORD:?missing Password}"
+          export PGPORT="${PGPORT:-5432}"
+          case "$(printf '%s' "${PGSSLMODE_RAW:-Require}" | tr '[:upper:]' '[:lower:]')" in
+            verifyca) PGSSLMODE="verify-ca" ;;
+            verifyfull) PGSSLMODE="verify-full" ;;
+            disable) PGSSLMODE="disable" ;;
+            *) PGSSLMODE="require" ;;
+          esac
+
+          echo "PGHOST=$PGHOST" >> "$GITHUB_ENV"
+          echo "PGDATABASE=$PGDATABASE" >> "$GITHUB_ENV"
+          echo "PGUSER=$PGUSER" >> "$GITHUB_ENV"
+          echo "PGPASSWORD=$PGPASSWORD" >> "$GITHUB_ENV"
+          echo "PGPORT=${PGPORT:-5432}" >> "$GITHUB_ENV"
+          echo "PGSSLMODE=$PGSSLMODE" >> "$GITHUB_ENV"
+          echo "::add-mask::$PGPASSWORD"
 
       - name: Query — Dispatch audit (reminder agent outcomes)
         shell: bash
@@ -61,7 +97,7 @@ jobs:
           set -euo pipefail
           HOURS="${{ github.event.inputs.lookback_hours }}"
           echo "=== Dispatch audit — recordatorios (últimas ${HOURS}h) ==="
-          psql "$CONN" <<SQL
+          psql <<SQL
             SELECT
               dispatched_at_utc,
               selected_agent_id,
@@ -83,7 +119,7 @@ jobs:
           HOURS="${{ github.event.inputs.lookback_hours }}"
           echo ""
           echo "=== Todos los dispatch (últimas ${HOURS}h) ==="
-          psql "$CONN" <<SQL
+          psql <<SQL
             SELECT
               dispatched_at_utc,
               channel_type,
@@ -105,7 +141,7 @@ jobs:
           HOURS="${{ github.event.inputs.lookback_hours }}"
           echo ""
           echo "=== Mensajes salientes (últimas ${HOURS}h) ==="
-          psql "$CONN" <<SQL
+          psql <<SQL
             SELECT
               created_at,
               status,
@@ -123,7 +159,7 @@ jobs:
           set -euo pipefail
           echo ""
           echo "=== Recordatorios activos ==="
-          psql "$CONN" <<SQL
+          psql <<SQL
             SELECT
               reminder_id,
               left(reminder_text, 80) AS reminder_text,
