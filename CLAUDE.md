@@ -280,6 +280,26 @@ documented intended behaviors without explicit instruction.
   **Migration renumbering note**: was `020_billing.sql`, renamed to `021_billing.sql` — slot 020
   was reserved for SB-000 Core Conversational Response.
 - Next per order: SB-011 (done). All SB-000, SB-010, SB-011 completed.
+- **SB-013 Mexican Invoice Request (Facturación CFDI)** — **spec drafted, NOT
+  implemented** (`specs/013-mexico-invoice-request/{spec,research,data-model,plan,
+  quickstart}.md` + `checklists/requirements.md`). Lets a WhatsApp user obtain a CFDI 4.0
+  *factura* for their own purchase. Core design: per-merchant invoicing is modeled as
+  versioned **declarative recipes** (shared catalog, PII-free) interpreted by **on-the-fly
+  execution agents** over a bounded action vocabulary (navigate/fill/click/submit/upload/
+  download/decode_qr/ask_user/wait_for_email) — chosen over per-merchant code or
+  aggregator-only because it scales to the long tail and **learns** (confidence + promote/
+  demote via learning events). Strategies: `self_service_portal | qr_deeplink |
+  email_request | aggregator_api | sat_self_invoice | manual_in_person | unknown`.
+  User **fiscal profile** (RFC/razón social/CP/régimen/uso CFDI/email) stored encrypted
+  (AES-256-GCM, `IFiscalDataProtector`, calendar-token pattern), consent-gated (SB-012
+  `UseFiscalData`/`RequestInvoiceOnBehalf`), RLS tenant+user. Reuses SB-004 OCR (receipt +
+  CSF), SB-009B dispatch (`InvoiceRequestDomainAgent` priority **40**), SB-005 deadline
+  reminders. Automation tiered: HTTP-form driver first, headless browser (Azure Container
+  Apps job) for SPA portals. **Safety**: never bypass captcha/anti-bot (human handoff),
+  act only on the user's own purchases; CFDI validated (UUID/RFC/total) before surfaced,
+  else `quarantined`. Planned migration `024_mexico_invoice_request.sql`; config
+  `Invoicing:*`; HTTP `api/invoicing/{fiscal-profiles,requests,merchants,recipes}`;
+  interim timer-sweep `InvoiceRequestSweepFunction` (Durable Functions = follow-up).
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 
