@@ -143,6 +143,9 @@ public sealed class SheloNabelPromptBuilder
 
         sb.AppendLine("## Mensaje de Jaime");
         sb.AppendLine(message);
+        sb.AppendLine();
+        sb.AppendLine("## Recordatorio");
+        sb.AppendLine("Revisa la conversación reciente y la memoria guardada ANTES de responder. Si ya tienes los datos del cliente (nombre, tipo de piel, edad, productos previos), úsalos directamente. No preguntes nada que ya sepas.");
 
         return sb.ToString().TrimEnd();
     }
