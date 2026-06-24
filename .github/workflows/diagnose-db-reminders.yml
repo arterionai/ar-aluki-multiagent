@@ -1,0 +1,145 @@
+name: Diagnose Reminder Failures (DB)
+
+on:
+  workflow_dispatch:
+    inputs:
+      lookback_hours:
+        description: Horas hacia atrás a revisar
+        required: false
+        default: "6"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: ar-Aluki
+  POSTGRES_SERVER_NAME: pg-araluki-dev-6155
+  KEYVAULT_NAME: kvaralukidev6155
+  POSTGRES_SECRET_NAME: PostgresConnectionString
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Open Postgres firewall
+        shell: bash
+        run: |
+          RUNNER_IP=$(curl -s https://api.ipify.org)
+          az postgres flexible-server firewall-rule create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$POSTGRES_SERVER_NAME" \
+            --rule-name "diag-runner-$GITHUB_RUN_ID" \
+            --start-ip-address "$RUNNER_IP" \
+            --end-ip-address "$RUNNER_IP"
+
+      - name: Fetch connection string from Key Vault
+        shell: bash
+        run: |
+          CONN=$(az keyvault secret show \
+            --vault-name "$KEYVAULT_NAME" \
+            --name "$POSTGRES_SECRET_NAME" \
+            --query value -o tsv)
+          echo "CONN=$CONN" >> $GITHUB_ENV
+          echo "::add-mask::$CONN"
+
+      - name: Query — Dispatch audit (reminder agent outcomes)
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo "=== Dispatch audit — recordatorios (últimas ${HOURS}h) ==="
+          psql "$CONN" <<SQL
+            SELECT
+              dispatched_at_utc,
+              selected_agent_id,
+              outcome,
+              failure_agent_id,
+              failure_details::text
+            FROM app.dispatch_audit_events
+            WHERE dispatched_at_utc >= now() - interval '${HOURS} hours'
+              AND (selected_agent_id ILIKE '%reminder%' OR failure_agent_id ILIKE '%reminder%'
+                   OR outcome = 'contained_failure')
+            ORDER BY dispatched_at_utc DESC
+            LIMIT 20;
+          SQL
+
+      - name: Query — All recent dispatch outcomes
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo ""
+          echo "=== Todos los dispatch (últimas ${HOURS}h) ==="
+          psql "$CONN" <<SQL
+            SELECT
+              dispatched_at_utc,
+              channel_type,
+              selected_agent_id,
+              outcome,
+              fallback_used,
+              failure_agent_id,
+              left(failure_details::text, 200) AS failure_details
+            FROM app.dispatch_audit_events
+            WHERE dispatched_at_utc >= now() - interval '${HOURS} hours'
+            ORDER BY dispatched_at_utc DESC
+            LIMIT 30;
+          SQL
+
+      - name: Query — Outbound messages sent
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo ""
+          echo "=== Mensajes salientes (últimas ${HOURS}h) ==="
+          psql "$CONN" <<SQL
+            SELECT
+              created_at,
+              status,
+              left(body, 120) AS body_preview,
+              error_reason
+            FROM app.outbound_messages
+            WHERE created_at >= now() - interval '${HOURS} hours'
+            ORDER BY created_at DESC
+            LIMIT 20;
+          SQL
+
+      - name: Query — Active reminders
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo ""
+          echo "=== Recordatorios activos ==="
+          psql "$CONN" <<SQL
+            SELECT
+              reminder_id,
+              left(reminder_text, 80) AS reminder_text,
+              scheduled_time_utc,
+              timezone,
+              status,
+              delivery_attempt_count,
+              created_at
+            FROM app.reminders
+            WHERE status IN ('scheduled', 'firing', 'delivery_failed')
+              AND deleted_at_utc IS NULL
+            ORDER BY scheduled_time_utc ASC
+            LIMIT 20;
+          SQL
+
+      - name: Close Postgres firewall
+        if: always()
+        shell: bash
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$POSTGRES_SERVER_NAME" \
+            --rule-name "diag-runner-$GITHUB_RUN_ID" \
+            --yes || true
