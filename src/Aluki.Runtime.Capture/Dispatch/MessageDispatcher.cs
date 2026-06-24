@@ -9,16 +9,21 @@ namespace Aluki.Runtime.Capture.Dispatch;
 /// deterministic priority order, selects at most one per dispatch cycle, contains
 /// agent failures, and persists an immutable <see cref="DispatchAuditRecord"/> for
 /// every cycle regardless of outcome (FR-016).
+/// When a selected agent throws an unexpected exception, the original message is
+/// enqueued in <see cref="IDispatchRetryQueue"/> for automatic replay after the
+/// system recovers (e.g. after a bug-fix deploy).
 /// </summary>
 public sealed class MessageDispatcher : IMessageDispatcher
 {
     private readonly IReadOnlyList<IDomainAgent> _agents;
     private readonly IDispatchAuditStore _auditStore;
+    private readonly IDispatchRetryQueue _retryQueue;
     private readonly ILogger<MessageDispatcher> _logger;
 
     public MessageDispatcher(
         IEnumerable<IDomainAgent> agents,
         IDispatchAuditStore auditStore,
+        IDispatchRetryQueue retryQueue,
         ILogger<MessageDispatcher> logger)
     {
         // Sort once at construction time: priority asc → agent-id lexical asc → registered-at asc.
@@ -28,6 +33,7 @@ public sealed class MessageDispatcher : IMessageDispatcher
             .ThenBy(a => a.RegisteredAt)
             .ToList();
         _auditStore = auditStore;
+        _retryQueue = retryQueue;
         _logger = logger;
     }
 
@@ -113,6 +119,9 @@ public sealed class MessageDispatcher : IMessageDispatcher
                     "Domain agent threw during handling (contained). agent_id={AgentId} message_id={MessageId}",
                     selected.AgentId, message.MessageId);
                 handleResult = new AgentHandleResult(false, ErrorCode: "contained_exception", ErrorMessage: ex.Message);
+
+                // Enqueue for automatic replay once the system recovers (best-effort).
+                _ = EnqueueRetryAsync(message, principal, selected.AgentId, "contained_exception");
             }
 
             if (handleResult.Success)
@@ -148,5 +157,20 @@ public sealed class MessageDispatcher : IMessageDispatcher
             PrincipalUserId: principal.UserId), ct);
 
         return new DispatchResult(outcome, selected?.AgentId, fallbackUsed, fallbackReason, auditId);
+    }
+
+    private async Task EnqueueRetryAsync(
+        UnifiedMessage message, PrincipalContext principal, string agentId, string errorCode)
+    {
+        try
+        {
+            await _retryQueue.EnqueueAsync(message, principal, agentId, errorCode, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "dispatch_retry.enqueue_failed agent_id={AgentId} message_id={MessageId}",
+                agentId, message.MessageId);
+        }
     }
 }
