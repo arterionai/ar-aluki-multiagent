@@ -31,7 +31,7 @@ public sealed class ReminderIntentParser
            time. Pay close attention to the YEAR in the current UTC time — always use the
            current year or a future year, never a past year.
 
-        Respond ONLY with a JSON object: {"reminder_text": "...", "scheduled_time_utc": "..."}
+        Respond ONLY with a JSON object: {{"reminder_text": "...", "scheduled_time_utc": "..."}}
         If you cannot determine a clear future time, set "scheduled_time_utc" to null.
         Do not include markdown fences or any other text.
         """;
