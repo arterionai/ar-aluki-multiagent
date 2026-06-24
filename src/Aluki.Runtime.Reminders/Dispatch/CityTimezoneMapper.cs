@@ -4,7 +4,7 @@ namespace Aluki.Runtime.Reminders.Dispatch;
 /// Maps city/region mentions extracted from free-text recall answers to IANA timezone IDs.
 /// Used by ReminderDomainAgent to display confirmation times in the user's local timezone.
 /// </summary>
-internal static class CityTimezoneMapper
+public static class CityTimezoneMapper
 {
     private static readonly (string[] Keywords, string Timezone)[] Map =
     [
