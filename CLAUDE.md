@@ -281,6 +281,52 @@ documented intended behaviors without explicit instruction.
   was reserved for SB-000 Core Conversational Response.
 - Next per order: SB-011 (done). All SB-000, SB-010, SB-011 completed.
 
+## Generic Tenancy Layer (multi-vendor / multi-org)
+
+Branch `claude/shelo-multivendor-crm` — not yet merged/deployed.
+Migration `027_multivendor_crm.sql`. Project: `Aluki.Runtime.Host/Skills/Tenancy/`.
+
+### Schema additions
+- `tenants.parent_tenant_id` (FK self-ref) — sub-group hierarchy (team, chapter, sub-org).
+  Create sub-tenants via `TenancyRepository.CreateSubTenantAsync`.
+- `tenant_whatsapp_channels(phone_number_id PK, tenant_id FK)` — maps a WA Business phone number
+  to an ORGANIZATION tenant. Enables automatic org routing on inbound messages.
+- `vendedora_assignments(tenant_id, owner_user_id, client_external_id, assigned_to_user_id/wa_id)`
+  — generic contact-to-member assignment (vendedoras in Sheló, trainers in a gym, etc.).
+  Unique per `(tenant_id, client_external_id)`.
+
+### Channel routing (auto org-tenant resolution)
+`ChannelIdentity` now carries `PhoneNumberId`. `WhatsAppCaptureCoordinator.BuildIdentity`
+populates it from `envelope.PhoneNumberId`. `PrincipalContextResolver.ResolveAsync` calls
+`ResolveChannelTenantAsync` when no `TenantHint` is present: looks up `tenant_whatsapp_channels`
+and uses the mapped `tenant_id` as the membership hint. Users with membership in the org tenant
+are automatically resolved to that ORGANIZATION context instead of their personal INDIVIDUAL one.
+
+### TenancyRepository (Aluki.Runtime.Host.Skills.Tenancy)
+- `RegisterWhatsAppChannelAsync(phoneNumberId, tenantId, displayName)` — upsert channel mapping
+- `LookupChannelTenantAsync(phoneNumberId)` — used by the resolver
+- `CreateSubTenantAsync(parentTenantId, displayName, tenantType)` — create child tenant
+- `AssignContactAsync(tenantId, ownerUserId, clientExternalId, assignedToWaId, notes)` — upsert assignment
+- `GetAssignmentsForMemberAsync(tenantId, memberUserId)` — list a member's assigned clients
+
+Register via `services.AddTenancy()` (`TenancyServiceCollectionExtensions`). Called automatically
+by `AddSheloNabelAssistant()` and should be called by any future org-agent registration.
+
+### Sheló NABEL CRM features (SB-013, branch only)
+Agent `SheloNabelDomainAgent` (priority 40) gains 4 new intent paths:
+- **Sales report** (`SheloNabelReportDetector`): "¿cómo vamos?", "resumen de ventas", "mis ventas" →
+  queries `reminders` for the org tenant (last 30 days), builds LLM summary. `SheloNabelCrmService.GetSalesReportAsync`.
+- **Reorder campaign preview** (`SheloNabelCampaignDetector`): "campaña de reorden", "avisa a todos los clientes" →
+  queries `reminders` with `status=scheduled AND scheduled_time_utc<=now()`, shows count + example message.
+  Caches pending items for 5 min awaiting explicit confirmation.
+- **Campaign execute** (confirmation path: "sí/dale/ok" after preview) → bulk-sends WhatsApp messages
+  to each client in the cached list. `IWhatsAppMessenger.SendTextMessageAsync` per item.
+- **Vendedora assignment** (`SheloNabelVendedoraDetector`): "asigna a [number] como vendedora" →
+  calls `TenancyRepository.AssignContactAsync`. Extracts phone with `SheloNabelVendedoraDetector.ExtractPhone`.
+
+`SheloNabelCrmService` is Sheló-specific (sales report / pending reorders). Generic operations
+delegate to `TenancyRepository` via `crmService.Tenancy.*`.
+
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 
 Directive: ALL AI inference goes through Azure OpenAI or Azure AI Foundry.
