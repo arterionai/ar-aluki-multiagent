@@ -140,7 +140,7 @@ public sealed class ReminderStore
             command.Parameters.AddWithValue("scheduled", scheduledTimeUtc.ToUniversalTime());
             command.Parameters.Add(new NpgsqlParameter("local_time", NpgsqlDbType.Time)
             {
-                Value = originalLocalTime is { } t ? t.ToTimeSpan() : DBNull.Value
+                Value = (object?)originalLocalTime ?? DBNull.Value
             });
             command.Parameters.AddWithValue("tz", timezone);
             command.Parameters.AddWithValue("channel", deliveryChannel);
@@ -504,7 +504,7 @@ public sealed class ReminderStore
             command.Parameters.AddWithValue("user", principal.UserId);
             command.Parameters.AddWithValue("text", reminderText);
             command.Parameters.AddWithValue("scheduled", firstOccurrenceUtc.ToUniversalTime());
-            command.Parameters.Add(new NpgsqlParameter("local_time", NpgsqlDbType.Time) { Value = originalLocalTime.ToTimeSpan() });
+            command.Parameters.Add(new NpgsqlParameter("local_time", NpgsqlDbType.Time) { Value = originalLocalTime });
             command.Parameters.AddWithValue("tz", timezone);
             command.Parameters.AddWithValue("channel", deliveryChannel);
             command.Parameters.AddWithValue("tier", quotaTier);
@@ -589,7 +589,7 @@ public sealed class ReminderStore
         {
             if (await reader.ReadAsync(cancellationToken))
             {
-                var localTime = reader.IsDBNull(0) ? new TimeOnly(9, 0) : TimeOnly.FromTimeSpan(reader.GetTimeSpan(0));
+                var localTime = reader.IsDBNull(0) ? new TimeOnly(9, 0) : reader.GetFieldValue<TimeOnly>(0);
                 var days = reader.IsDBNull(2) ? null : reader.GetFieldValue<string[]>(2);
                 context = new RecurrenceContext(
                     new Time.ReminderRecurrence(

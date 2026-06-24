@@ -1,0 +1,127 @@
+name: Diagnose Reminder Failures (App Insights)
+
+on:
+  workflow_dispatch:
+    inputs:
+      lookback_hours:
+        description: Horas hacia atrás a revisar
+        required: false
+        default: "48"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  WORKSPACE_ID: 306438f9-1e1d-4a0c-a27f-4c1afdb77d9c
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Query — AppExceptions (reminder_exception)
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo "=== Excepciones de recordatorios (últimas ${HOURS}h) ==="
+          az monitor log-analytics query \
+            --workspace "$WORKSPACE_ID" \
+            --analytics-query "
+              AppExceptions
+              | where TimeGenerated >= ago(${HOURS}h)
+              | where OuterMessage has_any ('reminder', 'Reminder', 'recordatorio', 'ASCII digit', 'parse near offset')
+                 or InnermostMessage has_any ('reminder', 'Reminder', 'ASCII digit', 'parse near offset')
+                 or Details has_any ('ReminderDomainAgent', 'ReminderService', 'ReminderStore', 'reminder_exception')
+              | project TimeGenerated, ExceptionType, InnermostType, InnermostMessage, OuterMessage, Details
+              | order by TimeGenerated desc
+              | take 20
+            " \
+            --output table || true
+
+      - name: Query — AppExceptions (full stack trace, last 20)
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo ""
+          echo "=== Stack traces completos — recordatorios (últimas ${HOURS}h) ==="
+          az monitor log-analytics query \
+            --workspace "$WORKSPACE_ID" \
+            --analytics-query "
+              AppExceptions
+              | where TimeGenerated >= ago(${HOURS}h)
+              | where Details has_any ('ReminderDomainAgent', 'ReminderService', 'ReminderStore', 'NpgsqlDbType', 'reminder_exception')
+                 or OuterMessage has_any ('ASCII digit', 'parse near offset', 'correct format')
+              | project TimeGenerated, ExceptionType, InnermostType, OuterMessage, InnermostMessage, Details
+              | order by TimeGenerated desc
+              | take 5
+            " \
+            --output json || true
+
+      - name: Query — AppTraces (ReminderDomainAgent errors)
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo ""
+          echo "=== Trazas de error — ReminderDomainAgent (últimas ${HOURS}h) ==="
+          az monitor log-analytics query \
+            --workspace "$WORKSPACE_ID" \
+            --analytics-query "
+              AppTraces
+              | where TimeGenerated >= ago(${HOURS}h)
+              | where SeverityLevel >= 2
+              | where Message has_any ('ReminderDomainAgent', 'reminder_exception', 'reminder.scope_denied',
+                                       'CreateAsync returned', 'ReminderStore', 'reminder_scheduled',
+                                       'ReminderIntentParser', 'ReminderScopeGuard', 'reminder_clarification')
+              | project TimeGenerated, SeverityLevel, Message, Properties
+              | order by TimeGenerated desc
+              | take 30
+            " \
+            --output table || true
+
+      - name: Query — All errors near reminder failure times
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo ""
+          echo "=== Todos los errores (SeverityLevel>=3) en ventana de fallos (últimas ${HOURS}h) ==="
+          az monitor log-analytics query \
+            --workspace "$WORKSPACE_ID" \
+            --analytics-query "
+              AppTraces
+              | where TimeGenerated >= ago(${HOURS}h)
+              | where SeverityLevel >= 3
+              | project TimeGenerated, SeverityLevel, Message, Properties
+              | order by TimeGenerated desc
+              | take 50
+            " \
+            --output table || true
+
+      - name: Query — AppRequests (reminder HTTP calls)
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOURS="${{ github.event.inputs.lookback_hours }}"
+          echo ""
+          echo "=== HTTP requests de reminders (últimas ${HOURS}h) ==="
+          az monitor log-analytics query \
+            --workspace "$WORKSPACE_ID" \
+            --analytics-query "
+              AppRequests
+              | where TimeGenerated >= ago(${HOURS}h)
+              | where Name has 'reminder' or Url has 'reminder'
+              | project TimeGenerated, Name, Url, ResultCode, Success, DurationMs
+              | order by TimeGenerated desc
+              | take 20
+            " \
+            --output table || true
