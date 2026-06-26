@@ -56,7 +56,12 @@ public sealed class ReminderIntentParser
 
         try
         {
-            var raw = await _router.CompleteAsync(systemPrompt, userPrompt, ct);
+            // Use a standalone token so the webhook's cancellation (client disconnect / host
+            // lifecycle) doesn't abort the LLM call mid-flight.  The outer ct is still checked
+            // after the call returns so a host shutdown still propagates cleanly.
+            using var llmCts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+            var raw = await _router.CompleteAsync(systemPrompt, userPrompt, llmCts.Token);
+            ct.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(raw))
                 return new ReminderParseResult(false, Error: "LLM returned empty response");
 

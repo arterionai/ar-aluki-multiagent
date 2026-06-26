@@ -76,7 +76,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
                 const string clarify =
                     "No pude entender cuándo quieres que te recuerde. "
                     + "¿Puedes ser más específico? Por ejemplo: «recuérdame en 30 minutos revisar el correo» 🙏";
-                await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, clarify, ct);
+                await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, clarify, CancellationToken.None);
                 return new AgentHandleResult(true, OutcomeCode: "reminder_clarification_needed");
             }
 
@@ -129,7 +129,9 @@ public sealed class ReminderDomainAgent : IDomainAgent
                     : "No pude crear el recordatorio en este momento. Inténtalo de nuevo. 🙏";
             }
 
-            await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, reply, ct);
+            // CancellationToken.None: the webhook ct may already be cancelled by the time the
+            // LLM + DB work completes; we must still deliver the reply to the user.
+            await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, reply, CancellationToken.None);
 
             return new AgentHandleResult(
                 result.StatusCode is 200 or 201,
