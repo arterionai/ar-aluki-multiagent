@@ -291,7 +291,8 @@ public sealed class ConversationalResponseAgent : IDomainAgent
     {
         try
         {
-            await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, body, ct);
+            // CancellationToken.None: reply must reach the user even if the webhook ct fired.
+            await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, body, CancellationToken.None);
         }
         catch (Exception ex)
         {

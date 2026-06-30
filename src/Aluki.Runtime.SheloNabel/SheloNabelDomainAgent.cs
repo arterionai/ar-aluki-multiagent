@@ -114,10 +114,11 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
                       && message.MediaRefs.Any(r => r.MediaKind == "audio");
         if (isAudio)
         {
+            // CancellationToken.None: acknowledgment must reach the user even if webhook ct fires.
             await _messenger.SendTextMessageAsync(
                 phoneNumberId, recipientWaId,
                 "🎧 Escuchando tu audio...",
-                ct);
+                CancellationToken.None);
 
             string? transcribed = null;
             try
@@ -229,7 +230,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
 
             await SendResponseAsync(
                 phoneNumberId, recipientWaId, response,
-                principal, correlationId, ct);
+                principal, correlationId);
             return new AgentHandleResult(true, OutcomeCode: "shelo_response");
         }
         catch (Exception ex)
@@ -292,12 +293,13 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
         }
 
         var userPrompt = _promptBuilder.BuildReminderUserPrompt(text, reminderStatus, history);
-        var recommendation = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, ct);
+        using var llmCtsr = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var recommendation = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, llmCtsr.Token);
 
         if (string.IsNullOrWhiteSpace(recommendation))
             recommendation = reminderStatus;
 
-        await SendResponseAsync(phoneNumberId, recipientWaId, recommendation, principal, correlationId, CancellationToken.None);
+        await SendResponseAsync(phoneNumberId, recipientWaId, recommendation, principal, correlationId);
         return new AgentHandleResult(true, OutcomeCode: "shelo_reminder_with_recommendation");
     }
 
@@ -350,12 +352,13 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
         }
 
         var userPrompt = _promptBuilder.BuildSaleUserPrompt(text, reorderStatus, history);
-        var response = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, ct);
+        using var llmCtss = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var response = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, llmCtss.Token);
 
         if (string.IsNullOrWhiteSpace(response))
             response = reorderStatus;
 
-        await SendResponseAsync(phoneNumberId, recipientWaId, response, principal, correlationId, CancellationToken.None);
+        await SendResponseAsync(phoneNumberId, recipientWaId, response, principal, correlationId);
         return new AgentHandleResult(true, OutcomeCode: "shelo_sale_recorded");
     }
 
@@ -366,12 +369,12 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
         string recipientWaId,
         string body,
         PrincipalContext principal,
-        string correlationId,
-        CancellationToken ct)
+        string correlationId)
     {
         try
         {
-            await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, body, ct);
+            // CancellationToken.None: reply must reach the user even if the webhook ct fired.
+            await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, body, CancellationToken.None);
         }
         catch (Exception ex)
         {
