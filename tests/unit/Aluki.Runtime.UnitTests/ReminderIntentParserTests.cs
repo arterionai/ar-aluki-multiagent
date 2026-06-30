@@ -127,11 +127,12 @@ public sealed class ReminderIntentParserTests
     // ── 7. Caller ct canceled — LLM still runs (standalone token) ────────────
 
     [Fact]
-    public async Task ParseAsync_CallerCanceled_before_call_throws_OperationCanceled_after_LLM()
+    public async Task ParseAsync_CallerCanceled_before_call_LLM_still_runs_returns_failure()
     {
         // The parser uses its own 45-second token for the LLM call, so even if the
         // caller's ct is pre-canceled the LLM is still invoked. After it completes,
-        // ThrowIfCancellationRequested re-surfaces the caller's cancellation.
+        // ct.ThrowIfCancellationRequested fires but is caught by the broad catch block —
+        // ParseAsync never throws; it returns Success=false instead.
         const string json = """{"reminder_text": "test", "scheduled_time_utc": "2026-07-02T10:00:00Z"}""";
         using var cts = new CancellationTokenSource();
         cts.Cancel(); // pre-cancel
@@ -139,11 +140,14 @@ public sealed class ReminderIntentParserTests
         var router = new StubChatModelRouter(json);
         var parser = new ReminderIntentParser(router, NullLogger<ReminderIntentParser>.Instance);
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            parser.ParseAsync("recuérdame test", Now, Timezone, cts.Token));
+        var result = await parser.ParseAsync("recuérdame test", Now, Timezone, cts.Token);
 
         // LLM was still called despite the pre-canceled ct.
         Assert.Equal(1, router.CallCount);
+        // The OperationCanceledException from ct.ThrowIfCancellationRequested is caught
+        // by ParseAsync's catch block — it does NOT propagate to the caller.
+        Assert.False(result.Success);
+        Assert.NotNull(result.Error);
     }
 
     // ── 8. LLM timeout (own 45s token fires) → failure, not re-thrown ────────
