@@ -10,6 +10,7 @@ using Aluki.Runtime.Extraction.Providers;
 using Aluki.Runtime.Memory;
 using Aluki.Runtime.Memory.Chat;
 using Aluki.Runtime.Memory.Recall;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -34,6 +35,7 @@ public sealed class ConversationalResponseAgent : IDomainAgent
     private readonly ConversationPromptBuilder _promptBuilder;
     private readonly IMetaMediaClient _mediaClient;
     private readonly ITranscriptionProvider _transcriptionProvider;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ConversationOptions _options;
     private readonly ILogger<ConversationalResponseAgent> _logger;
 
@@ -48,6 +50,7 @@ public sealed class ConversationalResponseAgent : IDomainAgent
         ConversationPromptBuilder promptBuilder,
         IMetaMediaClient mediaClient,
         ITranscriptionProvider transcriptionProvider,
+        IServiceScopeFactory scopeFactory,
         IOptions<ConversationOptions> options,
         ILogger<ConversationalResponseAgent> logger)
     {
@@ -61,6 +64,7 @@ public sealed class ConversationalResponseAgent : IDomainAgent
         _promptBuilder = promptBuilder;
         _mediaClient = mediaClient;
         _transcriptionProvider = transcriptionProvider;
+        _scopeFactory = scopeFactory;
         _options = options.Value;
         _logger = logger;
     }
@@ -134,9 +138,23 @@ public sealed class ConversationalResponseAgent : IDomainAgent
                 return new AgentHandleResult(false, OutcomeCode: "audio_transcription_failed");
             }
 
-            return await ProcessTextAsync(
-                transcribedText, message, principal, scope,
-                phoneNumberId, recipientWaId, correlationId, ct);
+            // Re-dispatch the transcribed text as a synthetic text-only message so that
+            // domain agents with higher priority (CalendarDomainAgent, ReminderDomainAgent, etc.)
+            // get a chance to act on the content before falling back to conversational LLM.
+            // IMessageDispatcher is resolved lazily to avoid a circular singleton dependency.
+            var syntheticMessage = message with
+            {
+                Text = transcribedText,
+                MediaRefs = Array.Empty<UnifiedMediaRef>()
+            };
+
+            using var dispatchScope = _scopeFactory.CreateScope();
+            var dispatcher = dispatchScope.ServiceProvider.GetRequiredService<IMessageDispatcher>();
+            var dispatchResult = await dispatcher.DispatchAsync(syntheticMessage, principal, ct);
+
+            return new AgentHandleResult(
+                dispatchResult.Outcome == DispatchOutcome.Dispatched,
+                OutcomeCode: $"audio_redispatched:{dispatchResult.Outcome}:{dispatchResult.SelectedAgentId}");
         }
 
         // --- Image messages: acknowledge, no LLM call ---
