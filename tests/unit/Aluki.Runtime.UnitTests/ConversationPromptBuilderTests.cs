@@ -33,6 +33,67 @@ public sealed class ConversationPromptBuilderTests
         Assert.Contains("never invent", prompt, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ── Scope restriction ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void BuildSystemPrompt_Contains_scope_restriction_section()
+    {
+        var prompt = Builder.BuildSystemPrompt();
+        Assert.Contains("SCOPE", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildSystemPrompt_Scope_section_covers_notes_reminders_calendar()
+    {
+        var prompt = Builder.BuildSystemPrompt();
+        Assert.Contains("notes", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("reminder", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("calendar", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildSystemPrompt_Scope_section_lists_out_of_scope_activities()
+    {
+        var prompt = Builder.BuildSystemPrompt();
+        // Must explicitly list what it does NOT do
+        Assert.Contains("recipes", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("code", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ── Prompt injection defense ─────────────────────────────────────────────────
+
+    [Fact]
+    public void BuildSystemPrompt_Contains_injection_defense_section()
+    {
+        var prompt = Builder.BuildSystemPrompt();
+        Assert.Contains("PROMPT INJECTION", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildSystemPrompt_Injection_defense_mentions_ignore_previous_instructions()
+    {
+        var prompt = Builder.BuildSystemPrompt();
+        Assert.Contains("ignore previous", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildSystemPrompt_Injection_defense_mentions_act_as()
+    {
+        var prompt = Builder.BuildSystemPrompt();
+        Assert.Contains("act as", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ── URL / link handling ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void BuildSystemPrompt_URL_handling_instructs_no_visit()
+    {
+        var prompt = Builder.BuildSystemPrompt();
+        // Must tell LLM it cannot open URLs
+        Assert.Contains("URL", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("internet", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ── User prompt — current message always present ───────────────────────────
 
     [Fact]
