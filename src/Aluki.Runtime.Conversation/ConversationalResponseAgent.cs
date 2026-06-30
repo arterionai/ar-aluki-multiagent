@@ -1,5 +1,6 @@
 using Aluki.Runtime.Abstractions.Conversation;
 using Aluki.Runtime.Abstractions.Memory;
+using Aluki.Runtime.Abstractions.Skills.LinkCapture;
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Abstractions.Skills.Feedback;
@@ -231,6 +232,22 @@ public sealed class ConversationalResponseAgent : IDomainAgent
             var recallOutcome = recallTask.Result;
             var recall = recallOutcome.Status != MemoryStatus.NoResult ? recallOutcome.Recall : null;
 
+            // 3a. Link save intent: bypass LLM, confirm save (memory ingestion already ran above).
+            if (LinkCanonicalization.IsLinkSaveIntent(text))
+            {
+                var url = LinkCanonicalization.ExtractFirstUrl(text)!;
+                var label = LinkCanonicalization.ExtractLabelText(text, url)?.Trim();
+                var saveReply = string.IsNullOrWhiteSpace(label)
+                    ? $"Guardado 🔗\n{url}"
+                    : $"Guardado 🔗 *{label}*\n{url}";
+                await SendResponseAsync(
+                    phoneNumberId, recipientWaId,
+                    saveReply, OutboundStatus.Delivered,
+                    errorReason: null,
+                    principal, correlationId, ct);
+                return new AgentHandleResult(true, OutcomeCode: "link_saved");
+            }
+
             // 3. Build prompt and call LLM.
             var isFirstMessage = history.Count == 0;
             var systemPrompt = _promptBuilder.BuildSystemPrompt(
@@ -291,7 +308,8 @@ public sealed class ConversationalResponseAgent : IDomainAgent
     {
         try
         {
-            await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, body, ct);
+            // CancellationToken.None: reply must reach the user even if the webhook ct fired.
+            await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, body, CancellationToken.None);
         }
         catch (Exception ex)
         {

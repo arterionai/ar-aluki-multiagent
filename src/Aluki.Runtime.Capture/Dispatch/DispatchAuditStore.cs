@@ -14,7 +14,10 @@ public sealed class DispatchAuditStore : IDispatchAuditStore
 
     public async Task<Guid> AppendAsync(DispatchAuditRecord record, CancellationToken ct)
     {
-        await using var conn = await _factory.OpenAsync(ct);
+        // CancellationToken.None: dispatch audit is a WORM record that must always be
+        // written. Using the webhook ct here caused OperationCanceledException when the
+        // HTTP lifecycle closed (~20s) and aborted the in-flight Npgsql insert.
+        await using var conn = await _factory.OpenAsync(CancellationToken.None);
         await using var cmd = new NpgsqlCommand(
             """
             insert into dispatch_audit_events (
@@ -55,7 +58,7 @@ public sealed class DispatchAuditStore : IDispatchAuditStore
         cmd.Parameters.AddWithValue("principal_user_id", (object?)record.PrincipalUserId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("dispatched_at_utc", record.DispatchedAtUtc);
 
-        var result = await cmd.ExecuteScalarAsync(ct);
+        var result = await cmd.ExecuteScalarAsync(CancellationToken.None);
         return (Guid)result!;
     }
 }

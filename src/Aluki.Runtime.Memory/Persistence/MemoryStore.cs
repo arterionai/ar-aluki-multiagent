@@ -187,9 +187,12 @@ public sealed class MemoryStore
         string correlationId,
         CancellationToken cancellationToken)
     {
-        await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await ScopedSessionContextSetter.ApplyAsync(connection, transaction, principal.TenantId, principal.UserId, cancellationToken);
+        // CancellationToken.None: recall audit is best-effort logging. Using the caller's
+        // webhook ct here caused OperationCanceledException when the HTTP lifecycle closed
+        // (~20s) before the audit DB write completed, crashing the domain agent's catch block.
+        await using var connection = await _connectionFactory.OpenAsync(CancellationToken.None);
+        await using var transaction = await connection.BeginTransactionAsync(CancellationToken.None);
+        await ScopedSessionContextSetter.ApplyAsync(connection, transaction, principal.TenantId, principal.UserId, CancellationToken.None);
 
         await WriteAuditAsync(
             connection,
@@ -201,9 +204,9 @@ public sealed class MemoryStore
             skillName: "MemoryRecallSkill",
             resultText: resultText,
             correlationId: correlationId,
-            cancellationToken: cancellationToken);
+            cancellationToken: CancellationToken.None);
 
-        await transaction.CommitAsync(cancellationToken);
+        await transaction.CommitAsync(CancellationToken.None);
     }
 
     /// <summary>

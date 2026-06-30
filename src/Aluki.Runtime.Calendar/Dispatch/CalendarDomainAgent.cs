@@ -85,7 +85,8 @@ public sealed class CalendarDomainAgent : IDomainAgent
             _ => CalendarSchedulingReply.Failed(),
         };
 
-        await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, reply, ct);
+        // CancellationToken.None: reply must reach the user even if the webhook ct fired.
+        await _messenger.SendTextMessageAsync(phoneNumberId, recipientWaId, reply, CancellationToken.None);
 
         return new AgentHandleResult(true, OutcomeCode: result.OutcomeType.ToString().ToLowerInvariant());
     }

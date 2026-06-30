@@ -40,6 +40,8 @@ public sealed class MemoryDomainAgent : IDomainAgent
 
         try
         {
+            // CancellationToken.None: ingestion is a best-effort WORM write that must complete
+            // regardless of the webhook lifecycle closing.
             await _sink.IngestAsync(new MemoryIngestionItem(
                 TenantId: principal.TenantId,
                 ContextId: principal.ContextId,
@@ -49,7 +51,7 @@ public sealed class MemoryDomainAgent : IDomainAgent
                 ContentText: message.Text,
                 ProvenanceRef: $"{message.ChannelType}:{message.MessageId}",
                 CorrelationId: message.CorrelationId ?? message.MessageId),
-                ct);
+                CancellationToken.None);
 
             return new AgentHandleResult(true, OutcomeCode: "ingested");
         }

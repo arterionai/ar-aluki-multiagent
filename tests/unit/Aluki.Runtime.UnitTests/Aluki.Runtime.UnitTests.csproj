@@ -27,6 +27,7 @@
     <ProjectReference Include="..\..\..\src\Aluki.Runtime.Reminders\Aluki.Runtime.Reminders.csproj" />
     <ProjectReference Include="..\..\..\src\Aluki.Runtime.Abstractions\Aluki.Runtime.Abstractions.csproj" />
     <ProjectReference Include="..\..\..\src\Aluki.Runtime.Conversation\Aluki.Runtime.Conversation.csproj" />
+    <ProjectReference Include="..\..\..\src\Aluki.Runtime.SheloNabel\Aluki.Runtime.SheloNabel.csproj" />
   </ItemGroup>
 
 </Project>

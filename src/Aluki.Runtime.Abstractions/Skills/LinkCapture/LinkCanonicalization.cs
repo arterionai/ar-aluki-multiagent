@@ -47,4 +47,29 @@ public static class LinkCanonicalization
                 u.Scheme is "http" or "https")
             .ToList();
     }
+
+    public static string? ExtractFirstUrl(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var urls = ExtractUrls(text);
+        return urls.Count > 0 ? urls[0] : null;
+    }
+
+    // Returns the text with the given URL removed, trimmed. Null if result is empty.
+    public static string? ExtractLabelText(string text, string url)
+    {
+        var remainder = text.Replace(url, string.Empty, StringComparison.Ordinal).Trim();
+        return string.IsNullOrWhiteSpace(remainder) ? null : remainder;
+    }
+
+    // True when text contains a URL and the surrounding text is NOT a question.
+    // Treat as "save this link" intent; bypass LLM topical response.
+    public static bool IsLinkSaveIntent(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var url = ExtractFirstUrl(text);
+        if (url is null) return false;
+        var remainder = ExtractLabelText(text, url) ?? string.Empty;
+        return !remainder.Contains('?') && !remainder.Contains('¿');
+    }
 }

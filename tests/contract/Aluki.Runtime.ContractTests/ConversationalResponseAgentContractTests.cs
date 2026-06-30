@@ -4,7 +4,6 @@ using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Capture.Channels.WhatsApp;
-using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Capture.Media;
 using Aluki.Runtime.Conversation;
 using Aluki.Runtime.Extraction;
@@ -222,6 +221,48 @@ public sealed class ConversationalResponseAgentContractTests
         Assert.True(result.Success);
         Assert.Equal("no_text_skipped", result.OutcomeCode);
         Assert.Equal(0, messenger.SendCount);
+    }
+
+    // ── HandleAsync — link save intent ────────────────────────────────────────
+
+    [Fact]
+    public async Task HandleAsync_UrlWithLabel_returns_link_saved_without_calling_LLM()
+    {
+        var messenger = new StubWhatsAppMessenger();
+        var outboundStore = new StubOutboundMessageStore();
+        var chatRouter = new StubChatModelRouter("should not be called");
+        var agent = BuildAgent(messenger, outboundStore, chatRouter: chatRouter);
+
+        var message = MakeWhatsAppMessage(
+            text: "donde ir en Houston https://www.instagram.com/reel/abc123/");
+
+        var result = await agent.HandleAsync(message, MakePrincipal(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("link_saved", result.OutcomeCode);
+        Assert.Equal(1, messenger.SendCount);
+        Assert.Contains("donde ir en Houston", outboundStore.LastMessage?.Body ?? "");
+        Assert.Contains("https://www.instagram.com/reel/abc123/", outboundStore.LastMessage?.Body ?? "");
+        // LLM should NOT have been called (no user prompt set)
+        Assert.Null(chatRouter.LastUserPrompt);
+    }
+
+    [Fact]
+    public async Task HandleAsync_UrlWithQuestion_calls_LLM_normally()
+    {
+        const string llmReply = "es un buen restaurante para cenar";
+        var chatRouter = new StubChatModelRouter(llmReply);
+        var agent = BuildAgent(chatRouter: chatRouter);
+
+        var message = MakeWhatsAppMessage(
+            text: "¿qué piensas de este? https://example.com/restaurant");
+
+        var result = await agent.HandleAsync(message, MakePrincipal(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("responded", result.OutcomeCode);
+        // LLM WAS called
+        Assert.NotNull(chatRouter.LastUserPrompt);
     }
 
     // ── Idempotency via outbound store ────────────────────────────────────────
