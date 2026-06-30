@@ -1,6 +1,7 @@
 using System.Globalization;
 using Aluki.Runtime.Abstractions.Conversation;
 using Aluki.Runtime.Abstractions.Memory;
+using Aluki.Runtime.Abstractions.Skills.LinkCapture;
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Security;
 using Aluki.Runtime.Capture.Channels.WhatsApp;
@@ -219,6 +220,18 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
                     text, principal, scope, systemPrompt, history,
                     phoneNumberId, recipientWaId, correlationId,
                     timeoutCts.Token);
+            }
+
+            // --- Path 3a: Link save intent — bypass LLM, confirm save briefly ---
+            if (LinkCanonicalization.IsLinkSaveIntent(text))
+            {
+                var url = LinkCanonicalization.ExtractFirstUrl(text)!;
+                var label = LinkCanonicalization.ExtractLabelText(text, url)?.Trim();
+                var saveReply = string.IsNullOrWhiteSpace(label)
+                    ? $"Guardado 🔗\n{url}"
+                    : $"Guardado 🔗 *{label}*\n{url}";
+                await SendResponseAsync(phoneNumberId, recipientWaId, saveReply, principal, correlationId);
+                return new AgentHandleResult(true, OutcomeCode: "link_saved");
             }
 
             // --- Path 3: General product/customer query or script request ---

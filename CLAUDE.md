@@ -388,6 +388,52 @@ place and must be tested before merge:
   - **URL handling**: same as Nabel — plain text, no visit, user prompted to paste text.
   - Unit tests: `ConversationPromptBuilderTests` in `tests/unit/` (extended).
 
+## Diagnostic rule — check Log Analytics first (MANDATORY)
+
+Before modifying any code to fix a production bug, ALWAYS query Log Analytics first
+to understand the exact failure. The deployed environment emits structured traces to
+App Insights / Log Analytics (workspace customerId `306438f9-…`, tables `AppTraces` /
+`AppRequests`). Useful queries:
+
+```kusto
+// Find errors for a specific agent/function in the last hour
+AppTraces
+| where TimeGenerated > ago(1h)
+| where SeverityLevel >= 3  // Warning+
+| where Message contains "ReminderDomainAgent" or Message contains "OperationCanceledException"
+| project TimeGenerated, SeverityLevel, Message, Properties
+| order by TimeGenerated desc
+```
+
+This rule exists because the root cause of a production error is almost always
+visible in the logs (e.g., OperationCanceledException with a SocketException 995
+trace) and avoids guessing. Only after confirming the root cause in logs should
+code be changed.
+
+## Link Save Intent detection (architectural rule)
+
+When a WhatsApp message contains a URL without a question mark (`?` or `¿`),
+it is treated as a "link save intent" — the user wants to save the link with a label,
+NOT ask the LLM a topical question about it.
+
+**Detection**: `LinkCanonicalization.IsLinkSaveIntent(text)` in
+`Aluki.Runtime.Abstractions/Skills/LinkCapture/LinkCanonicalization.cs`.
+
+**Behavior**:
+- Memory ingestion fire-and-forget still runs (URL + label text saved as memory artifact).
+- LLM is bypassed entirely.
+- Reply: `"Guardado 🔗 *{label}*\n{url}"` (label is text with URL removed).
+- `OutcomeCode = "link_saved"`.
+
+**Integration points**:
+- `SheloNabelDomainAgent.ProcessTextAsync` — Path 3a (after reminder/sale, before LLM).
+- `ConversationalResponseAgent.ProcessTextAsync` — Step 3a (after recall, before LLM).
+
+**Examples**:
+- `"donde ir en Houston https://instagram.com/reel/..."` → `link_saved`
+- `"¿qué piensas de este restaurante? https://..."` → LLM handles (conversational with URL)
+- `"recuérdame visitar https://..."` → reminder detector takes precedence (priority 60)
+
 ## Conventions
 
 - RLS via `app.current_tenant` / `app.current_user_id` GUCs + `app.user_in_tenant()`.
