@@ -434,6 +434,51 @@ NOT ask the LLM a topical question about it.
 - `"¿qué piensas de este restaurante? https://..."` → LLM handles (conversational with URL)
 - `"recuérdame visitar https://..."` → reminder detector takes precedence (priority 60)
 
+## Stub replacements (real implementations)
+
+The following previously-stubbed components have been replaced with real implementations:
+
+### YouTube OEmbed secondary provider
+- **File**: `src/Aluki.Runtime.Host/Skills/YouTubeLinks/OEmbedYouTubeMetadataProvider.cs`
+- Implements `ISecondaryYouTubeMetadataProvider` using the public OEmbed endpoint
+  (`https://www.youtube.com/oembed?url=...&format=json`). No credentials required.
+  Returns title + channel name; `IsPartial: true` (no description/publishedAt).
+- Named HttpClient `"youtube-oembed"` with 4s timeout.
+
+### YouTube Data API v3 primary provider
+- **File**: `src/Aluki.Runtime.Host/Skills/YouTubeLinks/YouTubeDataApiMetadataProvider.cs`
+- Implements `IPrimaryYouTubeMetadataProvider` using `https://www.googleapis.com/youtube/v3/videos`.
+- Config key: `YouTube:DataApiKey`. If not configured → returns null (fallback to secondary).
+  Returns title, description (≤500 chars), channel, publishedAt; `IsPartial: false`.
+- Named HttpClient `"youtube-data-api"` with 4s timeout.
+
+### YouTube classification via LLM
+- **File**: `src/Aluki.Runtime.Host/Skills/YouTubeLinks/FoundryYouTubeClassificationProvider.cs`
+- Implements `IYouTubeClassificationProvider` using `IChatModelRouter` (Azure AI Foundry).
+  Standalone CTS 45s (CancellationToken discipline). Parses JSON response for category/tags/summary/confidence.
+  Falls back to `YouTubeLinkConfidence.Low` on LLM or parse failure.
+
+### Delegated reminders real WhatsApp delivery
+- **File**: `src/Aluki.Runtime.DelegatedReminders/Delivery/WhatsAppDelegatedReminderDeliveryChannel.cs`
+- Implements `IDelegatedReminderDeliveryChannel` using `IWhatsAppMessenger`.
+- `RecipientIdentity` format: `"whatsapp:{phoneNumberId}:{waId}"` (same as reminder delivery_channel).
+- Always uses `CancellationToken.None` for sends (CancellationToken discipline).
+- Returns `TransientFailure` on send errors, `PermanentFailure` on unsupported identity format.
+- **Registration**: registered in `Program.cs` BEFORE `AddDelegatedReminders()` so the
+  `TryAddSingleton` fallback (logging stub) is skipped.
+
+### Feedback intent detection via LLM
+- **Files**: `src/Aluki.Runtime.Host/Skills/Feedback/IFeedbackIntentDetector.cs`,
+  `src/Aluki.Runtime.Host/Skills/Feedback/FoundryFeedbackIntentDetector.cs`
+- `IFeedbackIntentDetector.HasSuggestionIntentAsync(text, ct)` replaces the former
+  private keyword-matching static method in `FeedbackCaptureService`.
+- `FoundryFeedbackIntentDetector` uses `IChatModelRouter` with a YES/NO prompt.
+  Falls back to keyword matching if LLM call fails. Standalone CTS 45s.
+- `FeedbackCaptureService` now takes `IFeedbackIntentDetector` as a required constructor parameter.
+- Registered as `AddSingleton<IFeedbackIntentDetector, FoundryFeedbackIntentDetector>()` in
+  `FeedbackServiceExtensions`.
+- **Tests**: `FeedbackCaptureContractTests` uses `KeywordStubFeedbackIntentDetector`.
+
 ## Conventions
 
 - RLS via `app.current_tenant` / `app.current_user_id` GUCs + `app.user_in_tenant()`.

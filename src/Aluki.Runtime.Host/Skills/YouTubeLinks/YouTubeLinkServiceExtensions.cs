@@ -17,12 +17,17 @@ public static class YouTubeLinkServiceExtensions
         services.AddScoped<IYouTubeLinkRepository>(
             sp => sp.GetRequiredService<YouTubeLinkRepository>());
 
+        services.AddHttpClient("youtube-data-api")
+            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(4));
+        services.AddHttpClient("youtube-oembed")
+            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(4));
+
         services.AddSingleton<IPrimaryYouTubeMetadataProvider,
-            LoggingPrimaryYouTubeMetadataProvider>();
+            YouTubeDataApiMetadataProvider>();
         services.AddSingleton<ISecondaryYouTubeMetadataProvider,
-            LoggingSecondaryYouTubeMetadataProvider>();
+            OEmbedYouTubeMetadataProvider>();
         services.AddSingleton<IYouTubeClassificationProvider,
-            StubYouTubeClassificationProvider>();
+            FoundryYouTubeClassificationProvider>();
 
         services.AddScoped<YouTubeLinkCaptureService>();
 

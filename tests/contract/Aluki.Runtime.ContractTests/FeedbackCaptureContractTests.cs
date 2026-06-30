@@ -8,7 +8,7 @@ namespace Aluki.Runtime.ContractTests;
 public sealed class FeedbackCaptureContractTests
 {
     private static FeedbackCaptureService BuildService(StubFeedbackRepository? repo = null)
-        => new(repo ?? new StubFeedbackRepository());
+        => new(repo ?? new StubFeedbackRepository(), new KeywordStubFeedbackIntentDetector());
 
     private static CaptureSuggestionRequest MakeCaptureRequest(string text) =>
         new(TenantId: Guid.NewGuid(), UserId: Guid.NewGuid(), SourceMessageId: Guid.NewGuid().ToString(), MessageText: text);
@@ -142,6 +142,18 @@ public sealed class FeedbackCaptureContractTests
             CancellationToken.None);
 
         Assert.Equal(LinkAttachmentOutcome.NoActiveWindow, result.Outcome);
+    }
+}
+
+internal sealed class KeywordStubFeedbackIntentDetector : IFeedbackIntentDetector
+{
+    public Task<bool> HasSuggestionIntentAsync(string text, CancellationToken ct)
+    {
+        var lower = text.ToLowerInvariant();
+        var result = lower.Contains("suggestion") || lower.Contains("suggest") ||
+                     lower.Contains("idea") || lower.Contains("feature request") ||
+                     lower.Contains("feedback") || lower.Contains("sugerencia");
+        return Task.FromResult(result);
     }
 }
 
