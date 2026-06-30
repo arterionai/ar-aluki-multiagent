@@ -13,6 +13,7 @@ public static class FeedbackServiceExtensions
         services.TryAddSingleton<NpgsqlConnectionFactory>();
         services.AddScoped<FeedbackRepository>();
         services.AddScoped<IFeedbackRepository>(sp => sp.GetRequiredService<FeedbackRepository>());
+        services.AddSingleton<IFeedbackIntentDetector, FoundryFeedbackIntentDetector>();
         services.AddScoped<FeedbackCaptureService>();
         services.AddSingleton<IFeedbackCaptureSink, FeedbackCaptureSink>();
         return services;

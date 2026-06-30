@@ -28,6 +28,10 @@ var host = new HostBuilder()
         services.AddAiExtraction(context.Configuration);
         services.AddCalendarIntegration(context.Configuration);
         services.AddReminders(context.Configuration);
+        // Register real WhatsApp delivery before AddDelegatedReminders so the
+        // TryAddSingleton fallback (LoggingDelegatedReminderDeliveryChannel) is skipped.
+        services.AddSingleton<Aluki.Runtime.DelegatedReminders.Delivery.IDelegatedReminderDeliveryChannel,
+            Aluki.Runtime.DelegatedReminders.Delivery.WhatsAppDelegatedReminderDeliveryChannel>();
         services.AddDelegatedReminders(context.Configuration);
         services.AddLinkCapture(context.Configuration);
         services.AddYouTubeLinkCapture(context.Configuration);
