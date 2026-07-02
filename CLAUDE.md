@@ -381,10 +381,13 @@ documented intended behaviors without explicit instruction.
   - **SheloNabel catalog compacted** to one dense line per product (~3k → ~1k system
     tokens per message); ALL products/prices/doses/contraindications preserved and
     pinned by `SheloNabelProductCatalogTests`. Security prompt sections untouched.
-  - **Deploy**: Functions publish uses `-r linux-x64 --self-contained false
-    -p:PublishReadyToRun=true` (cold-start JIT cut). Assumes a Linux Function App —
-    verify `az functionapp show -n func-araluki-dev-6155 -g ar-Aluki --query kind`
-    before the first merge to main.
+  - **Deploy — ReadyToRun REVERTED (2026-07-02 outage)**: publishing with
+    `-r linux-x64 --self-contained false -p:PublishReadyToRun=true` deployed green
+    but the Functions host failed to start (503 on every route; webhook dead, no
+    read receipts). Publish is back to the plain `dotnet publish -c Release`. Do NOT
+    re-add RID/ReadyToRun without verifying the app OS/plan
+    (`az functionapp show -n func-araluki-dev-6155 -g ar-Aluki --query kind`) and
+    validating the package on a staging slot first.
   - **Ops follow-ups (manual, not in repo — need cost approval)**: (a) warm instance
     for `WestUS3Plan` (Always-On if dedicated / `minimum-elastic-instances`+
     `preWarmedInstanceCount` if Elastic Premium / `always-ready` if Flex) — biggest

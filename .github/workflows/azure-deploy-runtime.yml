@@ -190,12 +190,15 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # ReadyToRun pre-compiles the hot path (Npgsql, Azure SDKs, the 11 capability
-      # assemblies) so cold starts skip most JIT work. Framework-dependent + RID:
-      # assumes the Function App runs on Linux (verify with
-      # `az functionapp show -n func-araluki-dev-6155 -g ar-Aluki --query kind`).
+      # NOTE (2026-07-02 outage): publishing with `-r linux-x64 --self-contained false
+      # -p:PublishReadyToRun=true` deployed green but the Functions host then failed to
+      # start (503 on every route, webhook dead). Reverted to the plain publish that
+      # has always produced healthy deploys. Do NOT re-add the RID/ReadyToRun flags
+      # without first verifying the Function App OS/plan
+      # (`az functionapp show -n func-araluki-dev-6155 -g ar-Aluki --query kind`)
+      # AND validating the packaged output on a staging slot or test app.
       - name: Publish Function project
-        run: dotnet publish src/Aluki.Runtime.Functions/Aluki.Runtime.Functions.csproj --configuration Release --output publish -r linux-x64 --self-contained false -p:PublishReadyToRun=true
+        run: dotnet publish src/Aluki.Runtime.Functions/Aluki.Runtime.Functions.csproj --configuration Release --output publish
 
       - name: Package Function App
         shell: bash
