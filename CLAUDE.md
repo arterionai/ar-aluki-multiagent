@@ -80,7 +80,7 @@ documented intended behaviors without explicit instruction.
     success, the secure `connect_url` (consent page) on `reconnect_required`, or a clarification.
     `CalendarSchedulingReply`/detector are pure + unit-tested. Registered in `AddCalendarIntegration`
     (so both Host and the deployed Functions worker get it).
-- **SB-004 AI Extraction** — US1/US2/US3 done (not yet deployed). Project
+- **SB-004 AI Extraction** — US1/US2/US3 done & merged to main (deploys via the main pipeline). Project
   `Aluki.Runtime.Extraction` (mirrors `Memory`). Migration `009_ai_extraction.sql`
   (jobs/results/fields/audit + tenant RLS). US1 (audio→transcription+structured
   facts), US2 (text→summary/actions/decisions/entities), and **US3 receipt OCR
@@ -131,7 +131,7 @@ documented intended behaviors without explicit instruction.
     with `delivery_channel=whatsapp:{phoneNumberId}:{waId}`, and confirms via WhatsApp.
     When LLM cannot parse a clear time, agent asks for clarification (no reminder created).
     Registered in `AddReminders` as `IDomainAgent`.
-- **SB-006 Delegated Reminders** — done (not yet deployed). Project
+- **SB-006 Delegated Reminders** — done & merged to main (deploys via the main pipeline). Project
   `Aluki.Runtime.DelegatedReminders` (mirrors SB-005). Migration
   `012_delegated_reminders.sql` (delegated_reminders/delegated_recipient_contact/
   delegated_consent_registry/delegated_delivery_attempt/delegated_audit_event +
@@ -140,7 +140,10 @@ documented intended behaviors without explicit instruction.
   Tier2=phone-only, Tier3=unknown→awaiting_consent). **Anti-spam**: 10/day rolling
   window per sender (429 on breach). **Cancellation window**: 30s from due time
   (generated column `cancel_deadline_utc`). **Retry**: 1/2/4/8/16s backoff (31s
-  total), up to 5 attempts; permanent failures notify sender (stub, WhatsApp follow-up).
+  total), up to 5 attempts; **permanent failures notify the sender for real**: the
+  notice is routed through the same `IDelegatedReminderDeliveryChannel` targeting
+  `SenderIdentity` (WhatsApp channel in prod, logging stub otherwise), best-effort
+  with `CancellationToken.None`, never affecting the reminder's terminal state.
   **Consent gating**: Tier3 held as `awaiting_consent`; promoted to `scheduled` on
   `opted_in` upsert. Re-verified at delivery time. **Sweep**: `DelegatedReminderSweepFunction`
   (every minute), claims fresh-due + retry-due atomically via SECURITY DEFINER.
@@ -149,7 +152,7 @@ documented intended behaviors without explicit instruction.
   SHA256(`userId:recipient:dueUnixSeconds:contentLower`). HTTP (Functions):
   `POST/GET api/delegated-reminders`, `DELETE api/delegated-reminders/{id}`.
   Config `DelegatedReminders:*`.
-- **SB-009A Link Capture** — done (not yet deployed). Migration `013_link_capture.sql`
+- **SB-009A Link Capture** — done & merged to main (deploys via the main pipeline). Migration `013_link_capture.sql`
   (link_artifacts/link_provenance_refs/link_pending_confirmations/link_enrichment_attempts/
   link_enrichment_policy_decisions/link_audit_events + tenant RLS). URL detection +
   canonical normalization + SHA256 hash dedup (`LinkCanonicalization`). Capture
@@ -163,7 +166,7 @@ documented intended behaviors without explicit instruction.
   HTTP endpoints in Functions (`LinkCaptureFunctions`). HTTP: `POST api/skills/link-capture/
   capture|confirm|recall`. Config: no dedicated section (uses `Postgres:*` + `HttpClient`
   "link-enrichment").
-- **SB-008B YouTube Link Save and Classification** — done (not yet deployed). Migration
+- **SB-008B YouTube Link Save and Classification** — done & merged to main (deploys via the main pipeline). Migration
   `014_youtube_link_capture.sql` (saved_link_artifacts/link_enrichments/link_classifications/
   link_capture_audit_events + tenant RLS). YouTube URL detection + canonical video ID extraction
   (watch/shorts/embed/youtu.be/m.youtube.com), SHA256-style dedup by `canonical_video_id`.
@@ -174,7 +177,7 @@ documented intended behaviors without explicit instruction.
   interfaces/canonicalizer in `Aluki.Runtime.Abstractions/Skills/YouTubeLinks`; repository/services/
   stubs in `Aluki.Runtime.Host/Skills/YouTubeLinks/`; HTTP in Functions (`CaptureYoutubeLinksFunction`).
   HTTP: `POST api/v1/skills/youtube-links/capture`. Config: uses `Postgres:*`.
-- **SB-007 Feedback Suggestions Capture** — done (not yet deployed). Migration
+- **SB-007 Feedback Suggestions Capture** — done & merged to main (deploys via the main pipeline). Migration
   `015_feedback_suggestions.sql` (suggestions/suggestion_attachments/suggestion_state_transitions
   + tenant+user RLS). Keyword-based intent detection stub. 30-min context window per tenant-user
   (one active at a time). Attachment MIME/size validation (audio ≤50MB mp4/webm/ogg/mpeg,
@@ -184,7 +187,7 @@ documented intended behaviors without explicit instruction.
   `Aluki.Runtime.Abstractions/Skills/Feedback`; repository/service in
   `Aluki.Runtime.Host/Skills/Feedback/`; HTTP in Functions (`FeedbackFunctions`).
   HTTP: `POST api/skills/feedback/capture|attach`. Config: uses `Postgres:*`.
-- **SB-008A Suggestions Admin and Rewards** — done (not yet deployed). Migration
+- **SB-008A Suggestions Admin and Rewards** — done & merged to main (deploys via the main pipeline). Migration
   `016_suggestions_admin.sql` (suggestion_admin_queue/suggestion_admin_audit_ledger/
   reward_entitlement_ledger/reward_notification_delivery/reward_decision_record + tenant RLS,
   no user filter — staff-wide). RBAC: AdminReviewer (captured→under_review, category/priority),
@@ -196,7 +199,7 @@ documented intended behaviors without explicit instruction.
   in `Aluki.Runtime.Host/Skills/SuggestionsAdmin/`; HTTP in Functions (`SuggestionsAdminFunctions`).
   HTTP: `GET api/admin/suggestions`, `POST api/admin/suggestions/{id}/triage`,
   `POST api/admin/rewards/decide`. Config: uses `Postgres:*`.
-- **SB-009B Domain Agents Runtime** — done (not yet deployed). Migration
+- **SB-009B Domain Agents Runtime** — done & merged to main (deploys via the main pipeline). Migration
   `017_dispatch_audit.sql` (dispatch_audit_events + tenant RLS, WORM append-only).
   **Architecture**: `IMessageDispatcher` evaluates all registered `IDomainAgent`
   implementations in deterministic order (priority asc → AgentId lexical asc →
@@ -212,7 +215,7 @@ documented intended behaviors without explicit instruction.
   post-capture. Abstractions in `Aluki.Runtime.Abstractions/Orchestration/Dispatch/`;
   `MessageDispatcher`/`DispatchAuditStore`/`NullMessageDispatcher` in
   `Aluki.Runtime.Capture/Dispatch/`; `MemoryDomainAgent` in `Aluki.Runtime.Memory/Dispatch/`.
-- **SB-012 Governance & Security** — done (not yet deployed). Migration
+- **SB-012 Governance & Security** — done & merged to main (deploys via the main pipeline). Migration
   `018_governance_security.sql` (consent_records/policy_rules/policy_decision_log +
   tenant RLS). **Consent**: generic grant/revoke/check/list — broader than
   delegated_consent_registry (SB-006); partial unique index enforces one active
@@ -227,7 +230,7 @@ documented intended behaviors without explicit instruction.
   `Aluki.Runtime.Host/Skills/Governance/`; HTTP in Functions (`GovernanceFunctions`).
   HTTP: `POST api/governance/policy/evaluate`, `GET/POST api/governance/policy/rules`,
   `POST api/governance/consent/grant|revoke`, `GET api/governance/consent/check|by-grantor|by-grantee`.
-- **SB-011 Semantic Graph** — done (not yet deployed). Migration `019_semantic_graph.sql`
+- **SB-011 Semantic Graph** — done & merged to main (deploys via the main pipeline). Migration `019_semantic_graph.sql`
   (semantic_entities/semantic_entity_aliases/semantic_relationships/semantic_entity_facts +
   tenant RLS). **Entity resolution**: LLM-driven extraction via `IChatModelRouter` (Azure AI
   Foundry); deduplication by alias/canonical_name case-insensitive lookup; new entities created
@@ -243,7 +246,7 @@ documented intended behaviors without explicit instruction.
   HTTP in Functions (`SemanticGraphFunctions`).
   HTTP: `POST api/semantic-graph/resolve`, `GET/POST api/semantic-graph/entities|entities/{id}|entities/merge`,
   `GET api/semantic-graph/traverse|path`, `POST api/semantic-graph/relationships/{id}/archive`.
-- **SB-000 Core Conversational Response** — done (not yet deployed). Project
+- **SB-000 Core Conversational Response** — done & merged to main (deploys via the main pipeline). Project
   `Aluki.Runtime.Conversation`. Migration `020_conversational_response.sql`
   (`app.outbound_messages` table with idempotency constraint `(tenant_id,
   correlation_message_id)`, RLS select+insert policies). `ConversationalResponseAgent`
@@ -257,7 +260,7 @@ documented intended behaviors without explicit instruction.
   sets RLS GUC, returns chronological turns. `ConversationOptions`: HistoryWindowSize,
   LlmTimeoutSeconds, ErrorFallbackMessage, AudioAcknowledgmentMessage,
   NoMemoryMessageSuffix. `IWhatsAppMessenger` extended with `SendTextMessageAsync`.
-- **SB-010 Billing & Package Management** — done (not yet deployed). Migration `021_billing.sql`
+- **SB-010 Billing & Package Management** — done & merged to main (deploys via the main pipeline). Migration `021_billing.sql`
   (billing_catalog_versions/meter_prices/package_definition_versions/package_quota_rules as **global catalog
   tables, no RLS**; billing_accounts/package_subscriptions/billing_ledger_entries/credit_balances/
   credit_movements/invoices/invoice_lines/billing_audit_events as **tenant-scoped tables with RLS**;
@@ -280,7 +283,9 @@ documented intended behaviors without explicit instruction.
   **Migration renumbering note**: was `020_billing.sql`, renamed to `021_billing.sql` — slot 020
   was reserved for SB-000 Core Conversational Response.
 - Next per order: SB-011 (done). All SB-000, SB-010, SB-011 completed.
-- **SB-013 Contact Memory (Person Notes)** — done (not yet deployed). Spec at
+- **SB-013 Contact Memory (Person Notes)** — done & merged to main (PR #40; its
+  deploy FAILED because main's build was broken — see Deployment note below;
+  ships with the next merge). Spec at
   `specs/013-person-memory/spec.md`. No new migration — reuses `memory_artifact`
   (migration `007_personal_memory.sql`).
   - **Problem solved**: "Recuérdame que [person]..." without a time expression was
@@ -301,6 +306,64 @@ documented intended behaviors without explicit instruction.
     `MemoryServiceCollectionExtensions.AddPersonalMemory()`.
   - **Tests**: `PersonNoteDetectorTests` (unit, 317 total) +
     `PersonMemoryDomainAgentContractTests` (contract, 211 total).
+- **SB-014 Person Lookup (Contact-Card Recall)** — done (on branch, pending merge). Spec at
+  `specs/014-person-lookup/spec.md`. No new migration — reads `memory_artifact` via
+  the existing `MemoryStore.SearchAsync`.
+  - **Problem solved**: "¿Quién es Fer?" went through the generic recall pipeline,
+    whose `CorroborationPolicy` requires ≥2 relevant artifacts; a single saved note
+    (the normal SB-013 case) fell to `LowConfidence` and the bot asked for
+    clarification instead of showing the note the user explicitly saved.
+  - **`PersonLookupDetector`** (`Aluki.Runtime.Memory/Dispatch/PersonLookupDetector.cs`):
+    pure static, accent-insensitive with an index map back to the original text so the
+    extracted name preserves accents/casing. Triggers: "quién es", "quiénes son",
+    "qué sabes de/sobre", "who is", "what do you know about". Save-intent text
+    (`PersonNoteDetector`) never claims lookup (defense in depth).
+  - **`IPersonLookupService`/`PersonLookupService`**: embeds the name (standalone CTS
+    15s), `MemoryStore.SearchAsync` topK 8, filters by `MemoryOptions.RelevanceMaxDistance`,
+    takes 5 — NO corroboration minimum, NO LLM. Writes recall audit
+    (`memory.person_lookup`, `CancellationToken.None`) with result
+    `person_lookup_answered|no_notes|error`.
+  - **`PersonLookupDomainAgent`**: priority 58 (between PersonMemory 55 and Reminder 60),
+    WhatsApp only. Reply: "📇 *{Nombre}*\n• {nota}…" (notes truncated at 150 chars),
+    zero matches ⇒ save hint, failure ⇒ graceful fallback. Sends and outbound persist
+    with `CancellationToken.None`. Registered in `AddPersonalMemory()`.
+  - **Tests**: `PersonLookupDetectorTests` (unit) + `PersonLookupDomainAgentContractTests`
+    (contract). 569 total (340 unit + 229 contract).
+- **SB-015 Semantic Graph Ingestion Glue** — done (on branch, pending merge). Spec at
+  `specs/015-semantic-graph-ingestion/spec.md`. No new migration.
+  - **Problem solved**: SB-011 shipped entity resolution/traversal, but nothing in
+    the WhatsApp pipeline called `IEntityResolutionService.ResolveAsync` — the graph
+    tables stayed empty for real users (only the manual HTTP endpoints wrote to them).
+  - **Trigger**: `PersonMemoryDomainAgent.HandleAsync` (SB-013) now runs entity
+    resolution **fire-and-forget** (`Task.Run`) after ingesting the note. Optional
+    dependency: the agent takes `IServiceScopeFactory?` (default null) and resolves
+    `IEntityResolutionService` with `GetService` from a fresh scope — hosts without
+    `AddSemanticGraph()` skip silently; failures are logged and swallowed. Standalone
+    CTS 60 s (never the webhook ct). Fact linkage (`semantic_entity_facts`) is a
+    follow-up: `IMemoryIngestionSink` returns void, so the artifact ID isn't available.
+  - **Tests**: 3 new contract tests in `PersonMemoryDomainAgentContractTests`
+    (resolution invoked with note text+tenant, null-factory unchanged behavior,
+    resolution failure doesn't affect save). 572 total (340 unit + 232 contract).
+- **SB-016 Note Deletion via WhatsApp** — done (on branch, pending merge). Spec at
+  `specs/016-note-deletion/spec.md`. No new migration — uses `deleted_at_utc`
+  from `007_personal_memory.sql` (soft delete; recall already reports
+  `deleted_evidence_gap`).
+  - **`NoteDeletionDetector`** (`Aluki.Runtime.Memory/Dispatch/`): pure static,
+    accent-insensitive. Triggers: "borra lo de/la nota de", "elimina lo de/la nota
+    de", "olvida lo de", "olvida a", "forget about", "delete the note about". Topic
+    extracted from original text via shared `AccentInsensitiveText.NormalizeWithMap`
+    (helper extracted from `PersonLookupDetector`). Save intent (SB-013) wins.
+  - **`INoteDeletionService`/`NoteDeletionService`**: embeds topic (standalone CTS
+    15s), `MemoryStore.SoftDeleteRelevantAsync` — new method: single transaction,
+    soft-deletes within `MemoryOptions.DeleteMaxDistance` (default **0.5**, stricter
+    than recall's 0.6), closest first, cap 5, RETURNING texts + `memory.note_deleted`
+    audit in the same transaction. Delete+audit run with `CancellationToken.None`.
+  - **`NoteDeletionDomainAgent`**: priority 57 (save 55 → **delete 57** → lookup 58 →
+    reminder 60), WhatsApp only. Reply "Olvidado 🗑️" + bullet list of deleted notes
+    (echo enables immediate re-save of mistakes); zero matches ⇒ "No encontré notas
+    sobre *{topic}*". Registered in `AddPersonalMemory()`.
+  - **Tests**: `NoteDeletionDetectorTests` (unit) + `NoteDeletionDomainAgentContractTests`
+    (contract). 607 total (360 unit + 247 contract).
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 
@@ -330,6 +393,12 @@ Directive: ALL AI inference goes through Azure OpenAI or Azure AI Foundry.
 
 ## Deployment
 
+- **Broken-main incident (2026-07-02)**: the squash merge of PR #39 (`6cefa4d`)
+  left a duplicated image-ack block in `ConversationalResponseAgent` (CS0128), so
+  main did not compile and the deploys for `6cefa4d` and `db2918e` (SB-013) failed
+  at build+test. Fixed on `claude/vigilant-edison-eu474g` (commit `2aef6b7`);
+  everything pending ships with that branch's merge. Lesson: verify the CI run
+  after every merge to main — a squash merge can differ from the locally-tested tree.
 - GitHub Actions `.github/workflows/azure-deploy-runtime.yml` deploys on **push to
   `main` only** (feature branches do NOT auto-deploy). Jobs: build+test →
   `migrate-database` (opens PG firewall, applies migrations via a

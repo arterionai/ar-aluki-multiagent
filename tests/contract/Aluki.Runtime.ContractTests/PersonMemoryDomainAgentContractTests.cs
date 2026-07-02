@@ -2,8 +2,10 @@ using Aluki.Runtime.Abstractions.Conversation;
 using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Security;
+using Aluki.Runtime.Abstractions.SemanticGraph;
 using Aluki.Runtime.Capture.Channels.WhatsApp;
 using Aluki.Runtime.Memory.Dispatch;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -15,12 +17,14 @@ public sealed class PersonMemoryDomainAgentContractTests
     private static PersonMemoryDomainAgent BuildAgent(
         IMemoryIngestionSink? sink = null,
         IWhatsAppMessenger? messenger = null,
-        IOutboundMessageStore? outboundStore = null)
+        IOutboundMessageStore? outboundStore = null,
+        IServiceScopeFactory? scopeFactory = null)
         => new(
             sink: sink ?? new StubMemoryIngestionSink(),
             messenger: messenger ?? new StubWhatsAppMessenger(),
             outboundStore: outboundStore ?? new StubOutboundMessageStore(),
-            logger: NullLogger<PersonMemoryDomainAgent>.Instance);
+            logger: NullLogger<PersonMemoryDomainAgent>.Instance,
+            scopeFactory: scopeFactory);
 
     private static PrincipalContext MakePrincipal() =>
         new(UserId: Guid.NewGuid(), TenantId: Guid.NewGuid(), ContextId: Guid.NewGuid(),
@@ -173,6 +177,59 @@ public sealed class PersonMemoryDomainAgentContractTests
         Assert.NotNull(messenger.LastBody);
         Assert.True(messenger.LastBody!.Length < 230, "Reply body should be truncated for very long notes.");
     }
+
+    // ── SB-015: semantic graph ingestion glue ────────────────────────────────
+
+    [Fact]
+    public async Task HandleAsync_triggers_entity_resolution_fire_and_forget()
+    {
+        var resolver = new RecordingEntityResolutionService();
+        var services = new ServiceCollection();
+        services.AddSingleton<IEntityResolutionService>(resolver);
+        using var provider = services.BuildServiceProvider();
+        var agent = BuildAgent(scopeFactory: provider.GetRequiredService<IServiceScopeFactory>());
+
+        const string noteText = "guarda que Fer trabaja en TechCorp";
+        var principal = MakePrincipal();
+
+        var result = await agent.HandleAsync(MakeWhatsAppMessage(text: noteText), principal, CancellationToken.None);
+
+        Assert.True(result.Success);
+        var request = await resolver.WaitForCallAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(noteText, request.Text);
+        Assert.Equal(principal.TenantId, request.TenantId);
+    }
+
+    [Fact]
+    public async Task HandleAsync_without_scope_factory_saves_note_unchanged()
+    {
+        var sink = new StubMemoryIngestionSink();
+        var messenger = new StubWhatsAppMessenger();
+        var agent = BuildAgent(sink, messenger, scopeFactory: null);
+
+        var result = await agent.HandleAsync(MakeWhatsAppMessage(), MakePrincipal(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("person_note_saved", result.OutcomeCode);
+        Assert.Equal(1, sink.IngestCount);
+        Assert.Equal(1, messenger.SendCount);
+    }
+
+    [Fact]
+    public async Task HandleAsync_resolution_failure_does_not_affect_save()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IEntityResolutionService>(new ThrowingEntityResolutionService());
+        using var provider = services.BuildServiceProvider();
+        var messenger = new StubWhatsAppMessenger();
+        var agent = BuildAgent(messenger: messenger, scopeFactory: provider.GetRequiredService<IServiceScopeFactory>());
+
+        var result = await agent.HandleAsync(MakeWhatsAppMessage(), MakePrincipal(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("person_note_saved", result.OutcomeCode);
+        Assert.Equal(1, messenger.SendCount);
+    }
 }
 
 // ── Test doubles ─────────────────────────────────────────────────────────────
@@ -213,4 +270,25 @@ file sealed class StubOutboundMessageStore : IOutboundMessageStore
         PersistCount++;
         return Task.FromResult(true);
     }
+}
+
+file sealed class RecordingEntityResolutionService : IEntityResolutionService
+{
+    private readonly TaskCompletionSource<ResolveEntitiesRequest> _called =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task<ResolvedEntitiesResult> ResolveAsync(ResolveEntitiesRequest request, CancellationToken ct)
+    {
+        _called.TrySetResult(request);
+        return Task.FromResult(new ResolvedEntitiesResult([], []));
+    }
+
+    public async Task<ResolveEntitiesRequest> WaitForCallAsync(TimeSpan timeout)
+        => await _called.Task.WaitAsync(timeout);
+}
+
+file sealed class ThrowingEntityResolutionService : IEntityResolutionService
+{
+    public Task<ResolvedEntitiesResult> ResolveAsync(ResolveEntitiesRequest request, CancellationToken ct)
+        => throw new InvalidOperationException("graph backend down");
 }

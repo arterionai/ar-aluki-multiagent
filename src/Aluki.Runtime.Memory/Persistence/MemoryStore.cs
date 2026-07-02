@@ -144,6 +144,76 @@ public sealed class MemoryStore
     }
 
     /// <summary>
+    /// Soft-deletes the non-deleted artifacts within <paramref name="maxDistance"/>
+    /// of the query embedding (closest first, capped at <paramref name="limit"/>)
+    /// and writes the deletion audit in the same transaction. Returns the content
+    /// texts of the deleted notes so the reply can echo exactly what was removed.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> SoftDeleteRelevantAsync(
+        PrincipalScope principal,
+        float[] queryEmbedding,
+        double maxDistance,
+        int limit,
+        string correlationId,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await ScopedSessionContextSetter.ApplyAsync(connection, transaction, principal.TenantId, principal.UserId, cancellationToken);
+
+        var deleted = new List<string>();
+        await using (var command = new NpgsqlCommand(
+            """
+            update memory_artifact
+            set deleted_at_utc = now(), updated_at_utc = now()
+            where memory_artifact_id in (
+                select memory_artifact_id
+                from memory_artifact
+                where context_id = @context and deleted_at_utc is null and embedding is not null
+                  and (embedding <=> @q::vector) <= @maxd
+                order by embedding <=> @q::vector
+                limit @k)
+            returning content_text;
+            """,
+            connection,
+            transaction))
+        {
+            command.Parameters.AddWithValue("context", principal.ContextId);
+            command.Parameters.Add(new NpgsqlParameter("q", NpgsqlDbType.Text)
+            {
+                Value = Aluki.Runtime.Memory.Embeddings.AzureOpenAIEmbeddingClient.ToVectorLiteral(queryEmbedding)
+            });
+            command.Parameters.AddWithValue("maxd", maxDistance);
+            command.Parameters.AddWithValue("k", limit);
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (!reader.IsDBNull(0))
+                    deleted.Add(reader.GetString(0));
+            }
+        }
+
+        if (deleted.Count > 0)
+        {
+            await WriteAuditAsync(
+                connection,
+                transaction,
+                eventName: MemoryAuditEventName.NoteDeleted,
+                tenantId: principal.TenantId,
+                contextId: principal.ContextId,
+                userId: principal.UserId,
+                skillName: "NoteDeletionService",
+                resultText: $"deleted_{deleted.Count}",
+                correlationId: correlationId,
+                cancellationToken: cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return deleted;
+    }
+
+    /// <summary>
     /// True when deleted artifacts within relevance distance exist for the query —
     /// used to signal a deletion-caused evidence gap rather than no evidence.
     /// </summary>
