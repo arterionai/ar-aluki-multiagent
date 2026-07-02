@@ -39,6 +39,10 @@ public static class MemoryServiceCollectionExtensions
         // WhatsApp messages are promoted into recall-able personal memory.
         services.Replace(ServiceDescriptor.Singleton<IMemoryIngestionSink, MemoryIngestionSink>());
 
+        // Register the person-note domain agent (priority 55, before reminders).
+        services.AddSingleton<PersonMemoryDomainAgent>();
+        services.AddSingleton<IDomainAgent>(sp => sp.GetRequiredService<PersonMemoryDomainAgent>());
+
         // Register the catch-all fallback domain agent (dispatched when no specific agent claims intent).
         services.AddSingleton<MemoryDomainAgent>();
         services.AddSingleton<IDomainAgent>(sp => sp.GetRequiredService<MemoryDomainAgent>());

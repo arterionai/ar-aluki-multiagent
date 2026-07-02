@@ -280,6 +280,27 @@ documented intended behaviors without explicit instruction.
   **Migration renumbering note**: was `020_billing.sql`, renamed to `021_billing.sql` — slot 020
   was reserved for SB-000 Core Conversational Response.
 - Next per order: SB-011 (done). All SB-000, SB-010, SB-011 completed.
+- **SB-013 Contact Memory (Person Notes)** — done (not yet deployed). Spec at
+  `specs/013-person-memory/spec.md`. No new migration — reuses `memory_artifact`
+  (migration `007_personal_memory.sql`).
+  - **Problem solved**: "Recuérdame que [person]..." without a time expression was
+    incorrectly intercepted by `ReminderDomainAgent` (priority 60) and the bot would
+    ask "¿A qué hora te lo recuerdo?". Now `PersonMemoryDomainAgent` (priority 55,
+    in `Aluki.Runtime.Memory/Dispatch/`) intercepts it first, saves the note, and
+    confirms: "¡Anotado! 📒 {text}". Recall ("¿Quién es Fer?") continues to work
+    via the existing `ConversationalResponseAgent` + `MemoryRecallService` pipeline.
+  - **`PersonNoteDetector`** (`Aluki.Runtime.Memory/Dispatch/PersonNoteDetector.cs`):
+    pure static, accent-insensitive. Unconditional triggers: "guarda que", "anota
+    que", "apunta que", "toma nota que", "nota que". Conditional trigger: "recuérdame
+    que" (+ English variants) — claimed only when no future temporal expression is
+    found (mañana, a las, el lunes…, tomorrow, tonight, etc.).
+  - **`PersonMemoryDomainAgent`**: priority 55, WhatsApp only. Calls
+    `IMemoryIngestionSink.IngestAsync()` (CancellationToken.None), then replies via
+    `IWhatsAppMessenger.SendTextMessageAsync()` (CancellationToken.None), then
+    persists outbound record via `IOutboundMessageStore`. Registered in
+    `MemoryServiceCollectionExtensions.AddPersonalMemory()`.
+  - **Tests**: `PersonNoteDetectorTests` (unit, 317 total) +
+    `PersonMemoryDomainAgentContractTests` (contract, 211 total).
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 
