@@ -13,4 +13,11 @@ public sealed class MemoryOptions
     /// relevant/corroborating evidence.
     /// </summary>
     public double RelevanceMaxDistance { get; set; } = 0.6;
+
+    /// <summary>
+    /// Maximum cosine distance for a note to be soft-deleted by a WhatsApp deletion
+    /// command (SB-016). Stricter than recall relevance: deleting demands higher
+    /// confidence than reading.
+    /// </summary>
+    public double DeleteMaxDistance { get; set; } = 0.5;
 }
