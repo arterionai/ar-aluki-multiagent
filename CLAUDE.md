@@ -129,8 +129,19 @@ documented intended behaviors without explicit instruction.
     `HandleAsync` calls `ReminderIntentParser` (LLM via `IChatModelRouter`) to extract
     `(reminder_text, scheduled_time_utc)` from natural language, then `ReminderService.CreateAsync`
     with `delivery_channel=whatsapp:{phoneNumberId}:{waId}`, and confirms via WhatsApp.
-    When LLM cannot parse a clear time, agent asks for clarification (no reminder created).
+    When LLM cannot parse any date/time at all, agent asks for clarification (no reminder created).
     Registered in `AddReminders` as `IDomainAgent`.
+  - **Default hour for date-without-time** ("recuérdame mañana pagar mis tarjetas"): the
+    parser prompt instructs the LLM to assume **09:00 local** when a date/day is given with
+    no time-of-day, and maps parts of day deterministically (mañana→09:00, mediodía→12:00,
+    tarde→16:00, noche→20:00); configurable via `Reminders:DefaultHourLocal` /
+    `Morning|Midday|Afternoon|EveningHourLocal`. New JSON field `time_explicit` (absent ⇒
+    `true` for backward compat) surfaces as `ReminderParseResult.TimeExplicit`. When the
+    hour was assumed: (a) confirmation appends "(Asumí las HH:mm porque no especificaste
+    hora — si prefieres otra, dime y lo ajusto 🕘)"; (b) if the assumed time already passed
+    (e.g. "hoy" said in the evening), `ReminderDomainAgent`/`SheloNabelDomainAgent` roll
+    forward to now+1h instead of replying "la fecha ya pasó". `scheduled_time_utc: null`
+    (→ clarification) is now reserved for messages with no temporal reference at all.
 - **SB-006 Delegated Reminders** — done (not yet deployed). Project
   `Aluki.Runtime.DelegatedReminders` (mirrors SB-005). Migration
   `012_delegated_reminders.sql` (delegated_reminders/delegated_recipient_contact/

@@ -80,6 +80,15 @@ public sealed class ReminderDomainAgent : IDomainAgent
                 return new AgentHandleResult(true, OutcomeCode: "reminder_clarification_needed");
             }
 
+            var scheduledUtc = parsed.ScheduledTimeUtc.Value;
+            if (!parsed.TimeExplicit && scheduledUtc <= DateTimeOffset.UtcNow)
+            {
+                // The assumed default hour already passed (e.g. "recuérdame hoy…" sent in
+                // the evening → 09:00 local is behind us). Roll forward deterministically
+                // instead of rejecting the reminder with "la fecha ya pasó".
+                scheduledUtc = DateTimeOffset.UtcNow.AddHours(1);
+            }
+
             // Encode routing in delivery_channel so WhatsAppReminderDeliveryChannel can address the message.
             var deliveryChannel = $"whatsapp:{phoneNumberId}:{recipientWaId}";
 
@@ -91,7 +100,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
                     ContextId: principal.ContextId,
                     UserId: principal.UserId),
                 ReminderText: parsed.ReminderText,
-                ScheduledTimeUtc: parsed.ScheduledTimeUtc,
+                ScheduledTimeUtc: scheduledUtc,
                 Timezone: userTimezone,
                 ReminderType: ReminderType.OneShot,
                 Recurrence: null,
@@ -102,7 +111,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
             string reply;
             if (result.StatusCode is 200 or 201)
             {
-                reply = BuildConfirmation(parsed.ReminderText!, parsed.ScheduledTimeUtc!.Value, userTimezone);
+                reply = BuildConfirmation(parsed.ReminderText!, scheduledUtc, userTimezone, timeAssumed: !parsed.TimeExplicit);
                 if (!timezoneFromMemory)
                     reply += "\n\n¿En qué ciudad vives? Así podré enviarte los próximos recordatorios a la hora local correcta. 🌎";
             }
@@ -117,13 +126,13 @@ public sealed class ReminderDomainAgent : IDomainAgent
                     + "parsed_text={ParsedText} scheduled_utc={ScheduledUtc} now_utc={NowUtc} correlation_id={CorrelationId}",
                     result.StatusCode,
                     parsed.ReminderText,
-                    parsed.ScheduledTimeUtc,
+                    scheduledUtc,
                     DateTimeOffset.UtcNow,
                     correlationId);
 
                 // When the API rejected the scheduled time as past (likely the LLM returned
                 // the wrong year), give the user a specific, actionable message.
-                reply = result.StatusCode == 400 && parsed.ScheduledTimeUtc < DateTimeOffset.UtcNow
+                reply = result.StatusCode == 400 && scheduledUtc < DateTimeOffset.UtcNow
                     ? "La fecha que mencionaste ya pasó. ¿Puedes confirmar el año? "
                       + "Por ejemplo: «recuérdame el 1 de julio de 2026 a las 9am» 📅"
                     : "No pude crear el recordatorio en este momento. Inténtalo de nuevo. 🙏";
@@ -202,7 +211,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
         return (DefaultTimezone, false);
     }
 
-    private static string BuildConfirmation(string reminderText, DateTimeOffset scheduledUtc, string timezone)
+    private static string BuildConfirmation(string reminderText, DateTimeOffset scheduledUtc, string timezone, bool timeAssumed)
     {
         try
         {
@@ -210,11 +219,17 @@ public sealed class ReminderDomainAgent : IDomainAgent
             var local = TimeZoneInfo.ConvertTime(scheduledUtc, tz);
             var formatted = local.ToString("HH:mm 'del' dddd d 'de' MMMM",
                 CultureInfo.GetCultureInfo("es-MX"));
-            return $"✅ ¡Listo! Te recuerdo «{reminderText}» a las {formatted}. 🔔";
+            var reply = $"✅ ¡Listo! Te recuerdo «{reminderText}» a las {formatted}. 🔔";
+            if (timeAssumed)
+                reply += $"\n(Asumí las {local:HH:mm} porque no especificaste hora — si prefieres otra, dime y lo ajusto 🕘)";
+            return reply;
         }
         catch
         {
-            return $"✅ ¡Listo! Te recuerdo «{reminderText}» a las {scheduledUtc:HH:mm} UTC. 🔔";
+            var reply = $"✅ ¡Listo! Te recuerdo «{reminderText}» a las {scheduledUtc:HH:mm} UTC. 🔔";
+            if (timeAssumed)
+                reply += "\n(Asumí esa hora porque no especificaste una — si prefieres otra, dime y lo ajusto 🕘)";
+            return reply;
         }
     }
 }

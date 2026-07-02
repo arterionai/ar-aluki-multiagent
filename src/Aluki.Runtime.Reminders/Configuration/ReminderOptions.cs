@@ -19,4 +19,22 @@ public sealed class ReminderOptions
 
     /// <summary>Max reminders processed per sweep pass (bounds work per tick).</summary>
     public int SweepBatchSize { get; set; } = 100;
+
+    /// <summary>
+    /// Local hour (0–23) assumed when the user gives a date/day but no time
+    /// ("recuérdame mañana pagar mis tarjetas" → 09:00 local).
+    /// </summary>
+    public int DefaultHourLocal { get; set; } = 9;
+
+    /// <summary>Local hour assumed for "en la mañana" / "in the morning".</summary>
+    public int MorningHourLocal { get; set; } = 9;
+
+    /// <summary>Local hour assumed for "al mediodía" / "at noon".</summary>
+    public int MiddayHourLocal { get; set; } = 12;
+
+    /// <summary>Local hour assumed for "en la tarde" / "in the afternoon".</summary>
+    public int AfternoonHourLocal { get; set; } = 16;
+
+    /// <summary>Local hour assumed for "en la noche" / "tonight" / "in the evening".</summary>
+    public int EveningHourLocal { get; set; } = 20;
 }

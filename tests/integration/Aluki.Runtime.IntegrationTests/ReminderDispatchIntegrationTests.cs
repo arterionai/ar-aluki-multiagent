@@ -107,6 +107,58 @@ public sealed class ReminderDispatchIntegrationTests
         Assert.Contains("✅", messenger.LastMessage);
     }
 
+    [Fact]
+    public async Task HandleAsync_AssumedDefaultHour_confirmation_mentions_assumed_time()
+    {
+        if (!_fixture.Available) return;
+
+        // "recuérdame mañana pagar mis tarjetas" — no hour given, the LLM applies the
+        // 09:00 local default (15:00 UTC for America/Mexico_City) and flags time_explicit=false.
+        var seed = await _fixture.SeedPrincipalAsync();
+        var clock = new FakeClock(DateTimeOffset.Parse("2026-07-01T10:00:00Z"));
+        var llmJson = """{"reminder_text": "pagar mis tarjetas", "scheduled_time_utc": "2026-07-02T15:00:00Z", "time_explicit": false}""";
+        var messenger = new RecordingWhatsAppMessenger();
+
+        var agent = BuildAgent(clock, llmJson, messenger, seed);
+        var msg = MakeMessage("recuérdame mañana pagar mis tarjetas", seed);
+
+        var result = await agent.HandleAsync(msg, MakePrincipal(seed), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("reminder_scheduled", result.OutcomeCode);
+        Assert.Equal(1, messenger.SendCount);
+        Assert.Contains("✅", messenger.LastMessage);
+        Assert.Contains("no especificaste hora", messenger.LastMessage);
+        Assert.Contains("09:00", messenger.LastMessage); // 15:00 UTC = 09:00 America/Mexico_City
+        Assert.Equal(1, await CountReminders(seed.TenantId));
+    }
+
+    [Fact]
+    public async Task HandleAsync_AssumedHourAlreadyPast_rolls_forward_instead_of_failing()
+    {
+        if (!_fixture.Available) return;
+
+        // "recuérdame hoy sacar la basura" sent in the evening: the assumed 09:00 local
+        // is behind us. With time_explicit=false the agent must roll forward (+1h from
+        // real now) and create the reminder instead of replying "la fecha ya pasó".
+        var seed = await _fixture.SeedPrincipalAsync();
+        var clock = new FakeClock(DateTimeOffset.Parse("2026-07-01T10:00:00Z"));
+        var llmJson = """{"reminder_text": "sacar la basura", "scheduled_time_utc": "2020-01-01T15:00:00Z", "time_explicit": false}""";
+        var messenger = new RecordingWhatsAppMessenger();
+
+        var agent = BuildAgent(clock, llmJson, messenger, seed);
+        var msg = MakeMessage("recuérdame hoy sacar la basura", seed);
+
+        var result = await agent.HandleAsync(msg, MakePrincipal(seed), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("reminder_scheduled", result.OutcomeCode);
+        Assert.Equal(1, messenger.SendCount);
+        Assert.Contains("✅", messenger.LastMessage);
+        Assert.DoesNotContain("ya pasó", messenger.LastMessage);
+        Assert.Equal(1, await CountReminders(seed.TenantId));
+    }
+
     // ── HandleAsync — error paths ─────────────────────────────────────────────
 
     [Fact]
