@@ -260,7 +260,7 @@ public sealed class DelegatedReminderService
                         result.FailureCategory ?? DelegatedDeliveryFailureCategory.SystemError,
                         result.FailureMessage, completedAt, attemptNumber, cancellationToken);
 
-                    NotifySenderOfFailure(reminder, result.FailureCategory, result.FailureMessage);
+                    await NotifySenderOfFailureAsync(reminder, result.FailureCategory, result.FailureMessage);
                 }
                 else
                 {
@@ -275,7 +275,7 @@ public sealed class DelegatedReminderService
                             DelegatedDeliveryFailureCategory.TransientExhausted,
                             result.FailureMessage, completedAt, attemptNumber, cancellationToken);
 
-                        NotifySenderOfFailure(reminder, DelegatedDeliveryFailureCategory.TransientExhausted,
+                        await NotifySenderOfFailureAsync(reminder, DelegatedDeliveryFailureCategory.TransientExhausted,
                             "Maximum delivery attempts exhausted.");
                     }
                     else
@@ -305,16 +305,47 @@ public sealed class DelegatedReminderService
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
-    private void NotifySenderOfFailure(
+    private async Task NotifySenderOfFailureAsync(
         ClaimedDelegatedReminder reminder, string? failureCategory, string? failureMessage)
     {
-        // Stub: log the notification. Real implementation sends a WhatsApp message
-        // to the sender's identity via IWhatsAppMessenger (follow-up).
         _logger.LogWarning(
             "delegated_reminder.sender_failure_notification id={Id} sender={Sender} " +
             "recipient={Recipient} category={Category} message={Message}",
             reminder.Id, reminder.SenderIdentity, reminder.RecipientIdentity,
             failureCategory, failureMessage);
+
+        // Best-effort: route the notice through the same delivery channel targeting
+        // the sender's identity (WhatsApp channel in prod, logging stub otherwise).
+        // A notification failure must never affect the reminder's terminal state.
+        try
+        {
+            var preview = reminder.Content.Length <= 100 ? reminder.Content : reminder.Content[..100] + "…";
+            var notice = new DelegatedDeliveryRequest(
+                reminder.Id,
+                reminder.TenantId,
+                reminder.SenderUserId,
+                reminder.SenderIdentity,
+                RecipientIdentity: reminder.SenderIdentity,
+                Content: $"⚠️ No pude entregar tu recordatorio: \"{preview}\". " +
+                         "El destinatario no lo recibió; puedes intentar crearlo de nuevo.",
+                reminder.DueTimeUtc,
+                AttemptNumber: 0,
+                reminder.CorrelationId ?? reminder.Id.ToString("N"));
+
+            var result = await _deliveryChannel.DeliverAsync(notice, CancellationToken.None);
+            if (result.Status != DelegatedDeliveryStatus.Delivered)
+            {
+                _logger.LogWarning(
+                    "delegated_reminder.sender_notification_failed id={Id} sender={Sender} category={Category}",
+                    reminder.Id, reminder.SenderIdentity, result.FailureCategory);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "delegated_reminder.sender_notification_failed id={Id} sender={Sender}",
+                reminder.Id, reminder.SenderIdentity);
+        }
     }
 
     private string? ValidateCreate(CreateDelegatedReminderRequest request)

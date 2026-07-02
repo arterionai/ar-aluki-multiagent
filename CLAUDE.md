@@ -140,7 +140,10 @@ documented intended behaviors without explicit instruction.
   Tier2=phone-only, Tier3=unknown→awaiting_consent). **Anti-spam**: 10/day rolling
   window per sender (429 on breach). **Cancellation window**: 30s from due time
   (generated column `cancel_deadline_utc`). **Retry**: 1/2/4/8/16s backoff (31s
-  total), up to 5 attempts; permanent failures notify sender (stub, WhatsApp follow-up).
+  total), up to 5 attempts; **permanent failures notify the sender for real**: the
+  notice is routed through the same `IDelegatedReminderDeliveryChannel` targeting
+  `SenderIdentity` (WhatsApp channel in prod, logging stub otherwise), best-effort
+  with `CancellationToken.None`, never affecting the reminder's terminal state.
   **Consent gating**: Tier3 held as `awaiting_consent`; promoted to `scheduled` on
   `opted_in` upsert. Re-verified at delivery time. **Sweep**: `DelegatedReminderSweepFunction`
   (every minute), claims fresh-due + retry-due atomically via SECURITY DEFINER.
