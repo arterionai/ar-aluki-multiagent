@@ -1,6 +1,3 @@
-using System.Globalization;
-using System.Text;
-
 namespace Aluki.Runtime.Memory.Dispatch;
 
 /// <summary>
@@ -40,7 +37,7 @@ public static class PersonLookupDetector
         if (PersonNoteDetector.LooksLikePersonNote(text))
             return false;
 
-        var (normalized, map) = NormalizeWithMap(text);
+        var (normalized, map) = AccentInsensitiveText.NormalizeWithMap(text);
 
         foreach (var trigger in Triggers)
         {
@@ -62,31 +59,5 @@ public static class PersonLookupDetector
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// Lowercases and strips combining accents while tracking, for every normalized
-    /// character, the index of the original character it came from — so trigger
-    /// matches on the normalized text can be mapped back to the original string.
-    /// </summary>
-    private static (string Normalized, IReadOnlyList<int> Map) NormalizeWithMap(string text)
-    {
-        var sb = new StringBuilder(text.Length);
-        var map = new List<int>(text.Length);
-
-        for (var i = 0; i < text.Length; i++)
-        {
-            var decomposed = text[i].ToString().ToLowerInvariant().Normalize(NormalizationForm.FormD);
-            foreach (var c in decomposed)
-            {
-                if (CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
-                {
-                    sb.Append(c);
-                    map.Add(i);
-                }
-            }
-        }
-
-        return (sb.ToString(), map);
     }
 }

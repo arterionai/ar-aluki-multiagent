@@ -339,6 +339,26 @@ documented intended behaviors without explicit instruction.
   - **Tests**: 3 new contract tests in `PersonMemoryDomainAgentContractTests`
     (resolution invoked with note text+tenant, null-factory unchanged behavior,
     resolution failure doesn't affect save). 572 total (340 unit + 232 contract).
+- **SB-016 Note Deletion via WhatsApp** — done (not yet deployed). Spec at
+  `specs/016-note-deletion/spec.md`. No new migration — uses `deleted_at_utc`
+  from `007_personal_memory.sql` (soft delete; recall already reports
+  `deleted_evidence_gap`).
+  - **`NoteDeletionDetector`** (`Aluki.Runtime.Memory/Dispatch/`): pure static,
+    accent-insensitive. Triggers: "borra lo de/la nota de", "elimina lo de/la nota
+    de", "olvida lo de", "olvida a", "forget about", "delete the note about". Topic
+    extracted from original text via shared `AccentInsensitiveText.NormalizeWithMap`
+    (helper extracted from `PersonLookupDetector`). Save intent (SB-013) wins.
+  - **`INoteDeletionService`/`NoteDeletionService`**: embeds topic (standalone CTS
+    15s), `MemoryStore.SoftDeleteRelevantAsync` — new method: single transaction,
+    soft-deletes within `MemoryOptions.DeleteMaxDistance` (default **0.5**, stricter
+    than recall's 0.6), closest first, cap 5, RETURNING texts + `memory.note_deleted`
+    audit in the same transaction. Delete+audit run with `CancellationToken.None`.
+  - **`NoteDeletionDomainAgent`**: priority 57 (save 55 → **delete 57** → lookup 58 →
+    reminder 60), WhatsApp only. Reply "Olvidado 🗑️" + bullet list of deleted notes
+    (echo enables immediate re-save of mistakes); zero matches ⇒ "No encontré notas
+    sobre *{topic}*". Registered in `AddPersonalMemory()`.
+  - **Tests**: `NoteDeletionDetectorTests` (unit) + `NoteDeletionDomainAgentContractTests`
+    (contract). 607 total (360 unit + 247 contract).
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 
