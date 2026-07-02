@@ -7,7 +7,30 @@ using Microsoft.Extensions.Options;
 
 namespace Aluki.Runtime.Memory.Recall;
 
-public sealed record MemoryRecallOutcome(string Status, RecallResult Recall);
+/// <summary>
+/// How corroborated evidence is turned into claims.
+/// <para><see cref="Synthesized"/>: an extra LLM completion condenses the evidence into a
+/// single answer — used where the recall result IS the user-visible payload (memory HTTP API).</para>
+/// <para><see cref="Raw"/>: corroborated evidence is returned verbatim, one claim per
+/// candidate — used on WhatsApp reply paths where a downstream LLM re-reasons over the
+/// claims anyway, so the synthesis hop is redundant serial latency.</para>
+/// </summary>
+public enum RecallSynthesisMode
+{
+    Synthesized,
+    Raw
+}
+
+public sealed record MemoryRecallOutcome(string Status, RecallResult Recall)
+{
+    /// <summary>
+    /// Completion of the recall audit write (WORM). The write is started inside
+    /// RecallAsync without being awaited; reply-path callers MUST await this after
+    /// sending the user-visible reply and before returning from HandleAsync so the
+    /// audit record is always persisted before the webhook returns 200. Never faults.
+    /// </summary>
+    public Task AuditCompletion { get; init; } = Task.CompletedTask;
+}
 
 public interface IMemoryRecallService
 {
@@ -16,13 +39,22 @@ public interface IMemoryRecallService
         string queryText,
         string correlationId,
         CancellationToken cancellationToken);
+
+    Task<MemoryRecallOutcome> RecallAsync(
+        PrincipalScope principal,
+        string queryText,
+        string correlationId,
+        RecallSynthesisMode mode,
+        CancellationToken cancellationToken)
+        => RecallAsync(principal, queryText, correlationId, cancellationToken);
 }
 
 /// <summary>
 /// Grounded recall (US2): embed the query, vector-search non-deleted in-scope
-/// artifacts, apply the corroboration gate (>=2 to confirm), and synthesize an
-/// answer strictly from retrieved evidence via the Foundry model-router. Never
-/// fabricates: no/low evidence yields explicit no_result/low_confidence, and a
+/// artifacts, apply the corroboration gate (>=2 to confirm), and assemble an answer
+/// strictly from retrieved evidence — synthesized via the Foundry model-router or
+/// returned as raw corroborated claims depending on <see cref="RecallSynthesisMode"/>.
+/// Never fabricates: no/low evidence yields explicit no_result/low_confidence, and a
 /// deletion gap is signaled distinctly.
 /// </summary>
 public sealed class MemoryRecallService : IMemoryRecallService
@@ -50,10 +82,18 @@ public sealed class MemoryRecallService : IMemoryRecallService
         _logger = logger;
     }
 
+    public Task<MemoryRecallOutcome> RecallAsync(
+        PrincipalScope principal,
+        string queryText,
+        string correlationId,
+        CancellationToken cancellationToken)
+        => RecallAsync(principal, queryText, correlationId, RecallSynthesisMode.Synthesized, cancellationToken);
+
     public async Task<MemoryRecallOutcome> RecallAsync(
         PrincipalScope principal,
         string queryText,
         string correlationId,
+        RecallSynthesisMode mode,
         CancellationToken cancellationToken)
     {
         float[] queryEmbedding;
@@ -64,7 +104,7 @@ public sealed class MemoryRecallService : IMemoryRecallService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Query embedding failed. correlation_id={CorrelationId}", correlationId);
-            return await NoResultAsync(principal, "no_evidence", correlationId, cancellationToken);
+            return NoResult(principal, "no_evidence", correlationId);
         }
 
         var candidates = await _store.SearchAsync(principal, queryEmbedding, _options.RecallTopK, cancellationToken);
@@ -74,20 +114,26 @@ public sealed class MemoryRecallService : IMemoryRecallService
         {
             var hasDeleted = await _store.HasDeletedRelevantAsync(
                 principal, queryEmbedding, _options.RelevanceMaxDistance, cancellationToken);
-            return await NoResultAsync(principal, hasDeleted ? "deleted_evidence_gap" : "no_evidence", correlationId, cancellationToken);
+            return NoResult(principal, hasDeleted ? "deleted_evidence_gap" : "no_evidence", correlationId);
         }
 
         if (corroboration.Decision == RecallDecision.Low)
         {
-            await _store.WriteRecallAuditAsync(
-                principal, MemoryAuditEventName.RecallLowConfidence, MemoryStatus.LowConfidence, correlationId, cancellationToken);
-
             return new MemoryRecallOutcome(
                 MemoryStatus.LowConfidence,
-                _assembler.AssembleLowConfidence(corroboration.Relevant[0]));
+                _assembler.AssembleLowConfidence(corroboration.Relevant[0]))
+            {
+                AuditCompletion = StartRecallAudit(
+                    principal, MemoryAuditEventName.RecallLowConfidence, MemoryStatus.LowConfidence, correlationId)
+            };
         }
 
-        var answer = await SynthesizeAsync(queryText, corroboration.Relevant, correlationId, cancellationToken);
+        var result = mode == RecallSynthesisMode.Raw
+            ? _assembler.AssembleGroundedRaw(corroboration.Relevant)
+            : _assembler.AssembleGrounded(
+                await SynthesizeAsync(queryText, corroboration.Relevant, correlationId, cancellationToken),
+                corroboration.Relevant);
+
         if (MemoryContinuityPolicy.IsCrossChannel(corroboration.Relevant))
         {
             _logger.LogInformation(
@@ -96,23 +142,18 @@ public sealed class MemoryRecallService : IMemoryRecallService
                 correlationId);
         }
 
-        await _store.WriteRecallAuditAsync(
-            principal, MemoryAuditEventName.RecallGrounded, MemoryStatus.GroundedResult, correlationId, cancellationToken);
-
-        return new MemoryRecallOutcome(
-            MemoryStatus.GroundedResult,
-            _assembler.AssembleGrounded(answer, corroboration.Relevant));
+        return new MemoryRecallOutcome(MemoryStatus.GroundedResult, result)
+        {
+            AuditCompletion = StartRecallAudit(
+                principal, MemoryAuditEventName.RecallGrounded, MemoryStatus.GroundedResult, correlationId)
+        };
     }
 
-    private async Task<MemoryRecallOutcome> NoResultAsync(
+    private MemoryRecallOutcome NoResult(
         PrincipalScope principal,
         string reason,
-        string correlationId,
-        CancellationToken cancellationToken)
+        string correlationId)
     {
-        await _store.WriteRecallAuditAsync(
-            principal, MemoryAuditEventName.RecallNoResult, MemoryStatus.NoResult, correlationId, cancellationToken);
-
         return new MemoryRecallOutcome(
             MemoryStatus.NoResult,
             new RecallResult(
@@ -120,7 +161,38 @@ public sealed class MemoryRecallService : IMemoryRecallService
                 ClarificationQuestion: null,
                 NoResultReason: reason,
                 TopicGroups: [],
-                Claims: []));
+                Claims: []))
+        {
+            AuditCompletion = StartRecallAudit(
+                principal, MemoryAuditEventName.RecallNoResult, MemoryStatus.NoResult, correlationId)
+        };
+    }
+
+    /// <summary>
+    /// Starts the WORM recall-audit write without awaiting it so it overlaps with the
+    /// downstream LLM call instead of preceding it. CancellationToken.None per the
+    /// CancellationToken discipline (audit records must always be written); failures
+    /// are logged, never thrown — the returned task never faults.
+    /// </summary>
+    private Task StartRecallAudit(
+        PrincipalScope principal,
+        string eventName,
+        string status,
+        string correlationId)
+    {
+        return Task.Run(async () =>
+        {
+            try
+            {
+                await _store.WriteRecallAuditAsync(principal, eventName, status, correlationId, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Recall audit write failed. event={EventName} correlation_id={CorrelationId}",
+                    eventName, correlationId);
+            }
+        });
     }
 
     private async Task<string> SynthesizeAsync(

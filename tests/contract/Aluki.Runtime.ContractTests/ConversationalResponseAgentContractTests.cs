@@ -29,7 +29,8 @@ public sealed class ConversationalResponseAgentContractTests
         ITranscriptionProvider? transcriptionProvider = null,
         IChatModelRouter? chatRouter = null,
         IMemoryRecallService? recallService = null,
-        IServiceScopeFactory? scopeFactory = null)
+        IServiceScopeFactory? scopeFactory = null,
+        IConversationHistoryStore? historyStore = null)
     {
         if (scopeFactory is null)
         {
@@ -44,7 +45,7 @@ public sealed class ConversationalResponseAgentContractTests
             recallService: recallService ?? new StubMemoryRecallService(),
             chatRouter: chatRouter ?? null!,
             messenger: messenger ?? new StubWhatsAppMessenger(),
-            historyStore: new StubConversationHistoryStore(),
+            historyStore: historyStore ?? new StubConversationHistoryStore(),
             outboundStore: outboundStore ?? new StubOutboundMessageStore(),
             promptBuilder: new ConversationPromptBuilder(),
             mediaClient: mediaClient ?? new StubMetaMediaClient(shouldThrow: true),
@@ -273,6 +274,94 @@ public sealed class ConversationalResponseAgentContractTests
         Assert.NotNull(chatRouter.LastUserPrompt);
     }
 
+    // ── Recall fast path: triviality gate + link save skip recall entirely ───
+
+    [Fact]
+    public async Task HandleAsync_Trivial_message_skips_recall_and_no_memory_suffix()
+    {
+        var recall = new CountingMemoryRecallService();
+        var outboundStore = new StubOutboundMessageStore();
+        var options = new ConversationOptions();
+        var agent = BuildAgent(
+            outboundStore: outboundStore,
+            options: options,
+            chatRouter: new StubChatModelRouter("¡De nada! 😊"),
+            recallService: recall,
+            historyStore: new PopulatedConversationHistoryStore());
+
+        var result = await agent.HandleAsync(
+            MakeWhatsAppMessage(text: "gracias"), MakePrincipal(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("responded", result.OutcomeCode);
+        Assert.Equal(0, recall.CallCount); // recall (embedding + vector + audit) never ran
+        // No recall ran, so the "no memory" suffix must NOT be appended.
+        Assert.Equal("¡De nada! 😊", outboundStore.LastMessage?.Body);
+    }
+
+    [Fact]
+    public async Task HandleAsync_Substantive_message_with_no_result_still_appends_suffix()
+    {
+        var recall = new CountingMemoryRecallService();
+        var outboundStore = new StubOutboundMessageStore();
+        var options = new ConversationOptions();
+        var agent = BuildAgent(
+            outboundStore: outboundStore,
+            options: options,
+            chatRouter: new StubChatModelRouter("Claro, te ayudo."),
+            recallService: recall,
+            historyStore: new PopulatedConversationHistoryStore());
+
+        var result = await agent.HandleAsync(
+            MakeWhatsAppMessage(text: "necesito los datos del dentista"),
+            MakePrincipal(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, recall.CallCount);
+        Assert.Contains(options.NoMemoryMessageSuffix, outboundStore.LastMessage?.Body ?? "");
+    }
+
+    [Fact]
+    public async Task HandleAsync_Link_save_never_invokes_recall()
+    {
+        var recall = new CountingMemoryRecallService();
+        var agent = BuildAgent(recallService: recall);
+
+        var result = await agent.HandleAsync(
+            MakeWhatsAppMessage(text: "restaurante Houston https://maps.app/xyz"),
+            MakePrincipal(), CancellationToken.None);
+
+        Assert.Equal("link_saved", result.OutcomeCode);
+        Assert.Equal(0, recall.CallCount);
+    }
+
+    [Fact]
+    public async Task HandleAsync_joins_recall_audit_completion_before_returning()
+    {
+        // Fire-then-join WORM pattern: the audit write started inside RecallAsync must be
+        // complete by the time HandleAsync returns (so it always lands before the 200).
+        var auditCompleted = false;
+        var auditTask = Task.Delay(150).ContinueWith(_ => { auditCompleted = true; });
+        var recall = new CountingMemoryRecallService
+        {
+            Outcome = new MemoryRecallOutcome(
+                MemoryStatus.NoResult,
+                new RecallResult(null, null, "no_evidence", [], []))
+            {
+                AuditCompletion = auditTask
+            }
+        };
+        var agent = BuildAgent(
+            chatRouter: new StubChatModelRouter("ok"),
+            recallService: recall);
+
+        await agent.HandleAsync(
+            MakeWhatsAppMessage(text: "necesito los datos del dentista"),
+            MakePrincipal(), CancellationToken.None);
+
+        Assert.True(auditCompleted);
+    }
+
     // ── Idempotency via outbound store ────────────────────────────────────────
 
     [Fact]
@@ -367,6 +456,28 @@ file sealed class StubMemoryRecallService : IMemoryRecallService
     public Task<MemoryRecallOutcome> RecallAsync(
         PrincipalScope principal, string queryText, string correlationId, CancellationToken cancellationToken)
         => Task.FromResult(new MemoryRecallOutcome(MemoryStatus.NoResult, null!));
+}
+
+file sealed class CountingMemoryRecallService : IMemoryRecallService
+{
+    public int CallCount { get; private set; }
+    public MemoryRecallOutcome Outcome { get; set; } =
+        new(MemoryStatus.NoResult, new RecallResult(null, null, "no_evidence", [], []));
+
+    public Task<MemoryRecallOutcome> RecallAsync(
+        PrincipalScope principal, string queryText, string correlationId, CancellationToken cancellationToken)
+    {
+        CallCount++;
+        return Task.FromResult(Outcome);
+    }
+}
+
+file sealed class PopulatedConversationHistoryStore : IConversationHistoryStore
+{
+    public Task<IReadOnlyList<ConversationTurn>> GetRecentAsync(
+        Guid tenantId, Guid userId, int limit, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ConversationTurn>>(
+            [new ConversationTurn("mensaje previo", "inbound", DateTimeOffset.UtcNow.AddMinutes(-5))]);
 }
 
 file sealed class StubMessageDispatcher : IMessageDispatcher

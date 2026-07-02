@@ -1,4 +1,6 @@
+using System.ClientModel.Primitives;
 using System.Text.Json;
+using Aluki.Runtime.Memory.Chat;
 using Azure;
 using Azure.AI.OpenAI;
 using Microsoft.Extensions.Configuration;
@@ -60,7 +62,13 @@ public sealed class FoundryReceiptOcrProvider : IReceiptOcrProvider
             ?? configuration["Foundry:VisionDeployment"]
             ?? configuration["Foundry:ChatDeployment"]
             ?? "model-router";
-        _client = new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
+        var options = new AzureOpenAIClientOptions
+        {
+            // Shared bounded-lifetime handler: avoids the stale-idle-connection stall
+            // on the first OCR call after an idle period.
+            Transport = new HttpClientPipelineTransport(AzureAiSharedHttp.Client)
+        };
+        _client = new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey), options);
         _logger = logger ?? NullLogger<FoundryReceiptOcrProvider>.Instance;
     }
 

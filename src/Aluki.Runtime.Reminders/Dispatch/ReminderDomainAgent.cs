@@ -173,11 +173,14 @@ public sealed class ReminderDomainAgent : IDomainAgent
                 UserId: principal.UserId,
                 Roles: principal.Roles);
 
+            // Raw mode: city-name regexing works on verbatim notes; no synthesis LLM needed.
             var outcome = await _recallService.RecallAsync(
                 scope,
                 "¿En qué ciudad o zona horaria vive este usuario?",
                 correlationId,
+                RecallSynthesisMode.Raw,
                 timeoutCts.Token);
+            await outcome.AuditCompletion;
 
             if (outcome.Recall?.Claims is { Count: > 0 } claims)
             {

@@ -43,7 +43,10 @@ var host = new HostBuilder()
 
         // Register real media client before AddConversationalResponse so the
         // TryAddSingleton fallback (NullMetaMediaClient) inside it is skipped.
-        services.AddHttpClient<IWhatsAppMessenger, MetaWhatsAppMessenger>();
+        // Short timeout: a hung Graph send must not ride the 100 s HttpClient default
+        // on the reply path (sends are best-effort and retried by the user anyway).
+        services.AddHttpClient<IWhatsAppMessenger, MetaWhatsAppMessenger>(
+            client => client.Timeout = TimeSpan.FromSeconds(10));
         services.AddHttpClient<IMetaMediaClient, MetaMediaClient>();
         services.AddSingleton<IMediaBlobStore, BlobMediaStore>();
         services.AddSingleton<IMediaDownloadQueue, StorageQueueMediaDownloadQueue>();

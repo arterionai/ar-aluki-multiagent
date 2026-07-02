@@ -79,21 +79,28 @@ public sealed class MetaWhatsAppWebhookFunction
         {
             var payload = Encoding.UTF8.GetString(body);
 
-            // Immediately acknowledge each inbound message to the sender: blue ticks
-            // (read receipt) + the typing indicator. Best-effort, never blocks capture.
+            // Immediately dispatch (fire-and-forget) the read receipt + typing indicator for
+            // each inbound message so capture starts without waiting on the Meta Graph
+            // round-trip. Best-effort; CancellationToken.None per the token discipline —
+            // WhatsApp sends must never observe the webhook ct. The webhook holds the
+            // process until the full capture/dispatch cycle completes, so the background
+            // send always has time to finish.
             foreach (var target in MetaWebhookMapper.ExtractReadReceiptTargets(payload))
             {
-                try
+                _ = Task.Run(async () =>
                 {
-                    await _messenger.MarkReadAndShowTypingAsync(target.PhoneNumberId, target.MessageId, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(
-                        ex,
-                        "Failed to send read/typing indicator. provider_message_id={MessageId}",
-                        target.MessageId);
-                }
+                    try
+                    {
+                        await _messenger.MarkReadAndShowTypingAsync(target.PhoneNumberId, target.MessageId, CancellationToken.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "Failed to send read/typing indicator. provider_message_id={MessageId}",
+                            target.MessageId);
+                    }
+                }, CancellationToken.None);
             }
 
             var envelopes = MetaWebhookMapper.Map(payload);
