@@ -226,66 +226,65 @@ jobs:
             fi
 
             # Provision: user_profile + INDIVIDUAL tenant + membership + DM context + context_access
-            psql -v ON_ERROR_STOP=1 -1 << EOSQL
-DO \$\$
-DECLARE
-  v_user_id   uuid;
-  v_tenant_id uuid;
-  v_ctx_id    uuid;
-BEGIN
-  -- 1. Upsert user_profile
-  INSERT INTO users_profile (id, external_auth_id, phone)
-  VALUES (gen_random_uuid(), '$SENDER', '$SENDER')
-  ON CONFLICT (external_auth_id) DO NOTHING;
+            SQL_STATEMENT="DO \$\$
+            DECLARE
+              v_user_id   uuid;
+              v_tenant_id uuid;
+              v_ctx_id    uuid;
+            BEGIN
+              -- 1. Upsert user_profile
+              INSERT INTO users_profile (id, external_auth_id, phone)
+              VALUES (gen_random_uuid(), '$SENDER', '$SENDER')
+              ON CONFLICT (external_auth_id) DO NOTHING;
 
-  SELECT id INTO v_user_id FROM users_profile
-  WHERE external_auth_id = '$SENDER' AND status = 'ACTIVE'
-  LIMIT 1;
+              SELECT id INTO v_user_id FROM users_profile
+              WHERE external_auth_id = '$SENDER' AND status = 'ACTIVE'
+              LIMIT 1;
 
-  IF v_user_id IS NULL THEN
-    RAISE EXCEPTION 'user_profile not found after upsert for sender %', '$SENDER';
-  END IF;
+              IF v_user_id IS NULL THEN
+                RAISE EXCEPTION 'user_profile not found after upsert for sender %', '$SENDER';
+              END IF;
 
-  -- 2. Check if already has INDIVIDUAL tenant
-  SELECT m.tenant_id INTO v_tenant_id
-  FROM memberships m
-  JOIN tenants t ON t.id = m.tenant_id
-  WHERE m.user_id = v_user_id AND m.status = 'ACTIVE' AND t.tenant_type = 'INDIVIDUAL'
-  LIMIT 1;
+              -- 2. Check if already has INDIVIDUAL tenant
+              SELECT m.tenant_id INTO v_tenant_id
+              FROM memberships m
+              JOIN tenants t ON t.id = m.tenant_id
+              WHERE m.user_id = v_user_id AND m.status = 'ACTIVE' AND t.tenant_type = 'INDIVIDUAL'
+              LIMIT 1;
 
-  IF v_tenant_id IS NOT NULL THEN
-    RAISE NOTICE 'already has INDIVIDUAL tenant % for sender %', v_tenant_id, '$SENDER';
-    RETURN;
-  END IF;
+              IF v_tenant_id IS NOT NULL THEN
+                RAISE NOTICE 'already has INDIVIDUAL tenant % for sender %', v_tenant_id, '$SENDER';
+                RETURN;
+              END IF;
 
-  -- 3. Create INDIVIDUAL tenant
-  INSERT INTO tenants (id, tenant_type, display_name)
-  VALUES (gen_random_uuid(), 'INDIVIDUAL', '$SENDER')
-  RETURNING id INTO v_tenant_id;
+              -- 3. Create INDIVIDUAL tenant
+              INSERT INTO tenants (id, tenant_type, display_name)
+              VALUES (gen_random_uuid(), 'INDIVIDUAL', '$SENDER')
+              RETURNING id INTO v_tenant_id;
 
-  -- 4. Create membership (OWNER)
-  INSERT INTO memberships (tenant_id, user_id, role)
-  VALUES (v_tenant_id, v_user_id, 'OWNER')
-  ON CONFLICT (tenant_id, user_id) DO NOTHING;
+              -- 4. Create membership (OWNER)
+              INSERT INTO memberships (tenant_id, user_id, role)
+              VALUES (v_tenant_id, v_user_id, 'OWNER')
+              ON CONFLICT (tenant_id, user_id) DO NOTHING;
 
-  -- 5. Create DM context
-  INSERT INTO contexts (id, tenant_id, context_type, external_context_id, title)
-  VALUES (gen_random_uuid(), v_tenant_id, 'DM', '$SENDER', 'Personal')
-  ON CONFLICT (tenant_id, context_type, external_context_id) DO NOTHING;
+              -- 5. Create DM context
+              INSERT INTO contexts (id, tenant_id, context_type, external_context_id, title)
+              VALUES (gen_random_uuid(), v_tenant_id, 'DM', '$SENDER', 'Personal')
+              ON CONFLICT (tenant_id, context_type, external_context_id) DO NOTHING;
 
-  SELECT id INTO v_ctx_id FROM contexts
-  WHERE tenant_id = v_tenant_id AND context_type = 'DM' AND external_context_id = '$SENDER'
-  LIMIT 1;
+              SELECT id INTO v_ctx_id FROM contexts
+              WHERE tenant_id = v_tenant_id AND context_type = 'DM' AND external_context_id = '$SENDER'
+              LIMIT 1;
 
-  -- 6. Grant context_access
-  INSERT INTO context_access (context_id, user_id, access_role)
-  VALUES (v_ctx_id, v_user_id, 'OWNER')
-  ON CONFLICT (context_id, user_id) DO NOTHING;
+              -- 6. Grant context_access
+              INSERT INTO context_access (context_id, user_id, access_role)
+              VALUES (v_ctx_id, v_user_id, 'OWNER')
+              ON CONFLICT (context_id, user_id) DO NOTHING;
 
-  RAISE NOTICE 'provisioned sender=% userId=% tenantId=% contextId=%', '$SENDER', v_user_id, v_tenant_id, v_ctx_id;
-END;
-\$\$;
-EOSQL
+              RAISE NOTICE 'provisioned sender=% userId=% tenantId=% contextId=%', '$SENDER', v_user_id, v_tenant_id, v_ctx_id;
+            END;
+            \$\$;"
+            psql -v ON_ERROR_STOP=1 -1 -c "$SQL_STATEMENT"
 
             echo "  Provisioned $SENDER"
             PROVISIONED=$((PROVISIONED + 1))
