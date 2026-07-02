@@ -24,6 +24,8 @@ on:
         required: false
         default: 'false'
         type: string
+  push:
+    branches: [main]
 
 permissions:
   id-token: write
@@ -38,6 +40,7 @@ env:
 
 jobs:
   backfill:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Azure login (OIDC)
