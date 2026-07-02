@@ -29,6 +29,30 @@ public sealed class MemoryRecallResponseAssembler
             Claims: [claim]);
     }
 
+    /// <summary>
+    /// Builds a confirmed grounded result from the corroborated evidence verbatim —
+    /// one claim per candidate, each with its own citation — without the synthesis
+    /// LLM hop. Used on reply paths where a downstream completion re-reasons over
+    /// the claims anyway (RecallSynthesisMode.Raw).
+    /// </summary>
+    public RecallResult AssembleGroundedRaw(IReadOnlyList<RecallCandidate> relevant)
+    {
+        var claims = relevant
+            .Select((c, i) => new RecallClaim(
+                $"claim-{i + 1}",
+                c.ContentText ?? string.Empty,
+                "confirmed",
+                new List<Citation> { new(c.ArtifactId, c.ProvenanceRef) }))
+            .ToList();
+
+        return new RecallResult(
+            Confidence: "confirmed",
+            ClarificationQuestion: null,
+            NoResultReason: null,
+            TopicGroups: _topicGrouping.Group(relevant),
+            Claims: claims);
+    }
+
     /// <summary>Builds a low-confidence result for a single relevant artifact.</summary>
     public RecallResult AssembleLowConfidence(RecallCandidate single)
     {

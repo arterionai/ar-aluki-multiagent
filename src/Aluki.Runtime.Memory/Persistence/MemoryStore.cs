@@ -106,28 +106,31 @@ public sealed class MemoryStore
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await ScopedSessionContextSetter.ApplyAsync(connection, transaction, principal.TenantId, principal.UserId, cancellationToken);
 
-        await using var command = new NpgsqlCommand(
+        // RLS GUCs + query in one round-trip (hot reply path).
+        await using var batch = new NpgsqlBatch(connection, transaction);
+        batch.BatchCommands.Add(ScopedSessionContextSetter.CreateApplyBatchCommand(principal.TenantId, principal.UserId));
+
+        var search = new NpgsqlBatchCommand(
             """
             select memory_artifact_id, content_text, provenance_ref, source_channel, (embedding <=> @q::vector) as dist
             from memory_artifact
             where context_id = @context and deleted_at_utc is null and embedding is not null
             order by embedding <=> @q::vector
             limit @k;
-            """,
-            connection,
-            transaction);
-        command.Parameters.AddWithValue("context", principal.ContextId);
-        command.Parameters.Add(new NpgsqlParameter("q", NpgsqlDbType.Text)
+            """);
+        search.Parameters.AddWithValue("context", principal.ContextId);
+        search.Parameters.Add(new NpgsqlParameter("q", NpgsqlDbType.Text)
         {
             Value = Aluki.Runtime.Memory.Embeddings.AzureOpenAIEmbeddingClient.ToVectorLiteral(queryEmbedding)
         });
-        command.Parameters.AddWithValue("k", topK);
+        search.Parameters.AddWithValue("k", topK);
+        batch.BatchCommands.Add(search);
 
         var results = new List<RecallCandidate>(topK);
-        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        await using (var reader = await batch.ExecuteReaderAsync(cancellationToken))
         {
+            await reader.NextResultAsync(cancellationToken); // skip set_config result set
             while (await reader.ReadAsync(cancellationToken))
             {
                 results.Add(new RecallCandidate(
@@ -225,28 +228,39 @@ public sealed class MemoryStore
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await ScopedSessionContextSetter.ApplyAsync(connection, transaction, principal.TenantId, principal.UserId, cancellationToken);
 
-        await using var command = new NpgsqlCommand(
+        // RLS GUCs + query in one round-trip (hot reply path).
+        await using var batch = new NpgsqlBatch(connection, transaction);
+        batch.BatchCommands.Add(ScopedSessionContextSetter.CreateApplyBatchCommand(principal.TenantId, principal.UserId));
+
+        var existsQuery = new NpgsqlBatchCommand(
             """
             select exists (
                 select 1 from memory_artifact
                 where context_id = @context and deleted_at_utc is not null and embedding is not null
                   and (embedding <=> @q::vector) <= @maxd
             );
-            """,
-            connection,
-            transaction);
-        command.Parameters.AddWithValue("context", principal.ContextId);
-        command.Parameters.Add(new NpgsqlParameter("q", NpgsqlDbType.Text)
+            """);
+        existsQuery.Parameters.AddWithValue("context", principal.ContextId);
+        existsQuery.Parameters.Add(new NpgsqlParameter("q", NpgsqlDbType.Text)
         {
             Value = Aluki.Runtime.Memory.Embeddings.AzureOpenAIEmbeddingClient.ToVectorLiteral(queryEmbedding)
         });
-        command.Parameters.AddWithValue("maxd", maxDistance);
+        existsQuery.Parameters.AddWithValue("maxd", maxDistance);
+        batch.BatchCommands.Add(existsQuery);
 
-        var result = await command.ExecuteScalarAsync(cancellationToken);
+        var hasDeleted = false;
+        await using (var reader = await batch.ExecuteReaderAsync(cancellationToken))
+        {
+            await reader.NextResultAsync(cancellationToken); // skip set_config result set
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                hasDeleted = reader.GetBoolean(0);
+            }
+        }
+
         await transaction.RollbackAsync(cancellationToken);
-        return result is bool b && b;
+        return hasDeleted;
     }
 
     /// <summary>Records a recall outcome audit under the principal's scope.</summary>
@@ -262,20 +276,27 @@ public sealed class MemoryStore
         // (~20s) before the audit DB write completed, crashing the domain agent's catch block.
         await using var connection = await _connectionFactory.OpenAsync(CancellationToken.None);
         await using var transaction = await connection.BeginTransactionAsync(CancellationToken.None);
-        await ScopedSessionContextSetter.ApplyAsync(connection, transaction, principal.TenantId, principal.UserId, CancellationToken.None);
 
-        await WriteAuditAsync(
-            connection,
-            transaction,
-            eventName: eventName,
-            tenantId: principal.TenantId,
-            contextId: principal.ContextId,
-            userId: principal.UserId,
-            skillName: "MemoryRecallSkill",
-            resultText: resultText,
-            correlationId: correlationId,
-            cancellationToken: CancellationToken.None);
+        // RLS GUCs + insert in one round-trip.
+        await using var batch = new NpgsqlBatch(connection, transaction);
+        batch.BatchCommands.Add(ScopedSessionContextSetter.CreateApplyBatchCommand(principal.TenantId, principal.UserId));
 
+        var insert = new NpgsqlBatchCommand(
+            """
+            insert into memory_audit_event (
+                event_name, tenant_id, context_id, user_id, skill_name, result, correlation_id)
+            values (@event_name, @tenant_id, @context_id, @user_id, @skill_name, @result, @correlation_id);
+            """);
+        insert.Parameters.AddWithValue("event_name", eventName);
+        insert.Parameters.AddWithValue("tenant_id", principal.TenantId);
+        insert.Parameters.AddWithValue("context_id", (object?)principal.ContextId ?? DBNull.Value);
+        insert.Parameters.AddWithValue("user_id", (object?)principal.UserId ?? DBNull.Value);
+        insert.Parameters.AddWithValue("skill_name", "MemoryRecallSkill");
+        insert.Parameters.AddWithValue("result", resultText);
+        insert.Parameters.AddWithValue("correlation_id", correlationId);
+        batch.BatchCommands.Add(insert);
+
+        await batch.ExecuteNonQueryAsync(CancellationToken.None);
         await transaction.CommitAsync(CancellationToken.None);
     }
 

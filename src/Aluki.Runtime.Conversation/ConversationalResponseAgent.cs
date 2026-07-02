@@ -232,67 +232,90 @@ public sealed class ConversationalResponseAgent : IDomainAgent
                 CancellationToken.None);
         }, CancellationToken.None);
 
-        // 2. Fetch history and recall in parallel.
+        // 2a. Link save intent: bypass LLM AND recall entirely — the reply is deterministic
+        // (memory ingestion already runs fire-and-forget above), so pay zero recall cost.
+        if (LinkCanonicalization.IsLinkSaveIntent(text))
+        {
+            var url = LinkCanonicalization.ExtractFirstUrl(text)!;
+            var label = LinkCanonicalization.ExtractLabelText(text, url)?.Trim();
+            var saveReply = string.IsNullOrWhiteSpace(label)
+                ? $"Guardado 🔗\n{url}"
+                : $"Guardado 🔗 *{label}*\n{url}";
+            await SendResponseAsync(
+                phoneNumberId, recipientWaId,
+                saveReply, OutboundStatus.Delivered,
+                errorReason: null,
+                principal, correlationId, ct);
+            return new AgentHandleResult(true, OutcomeCode: "link_saved");
+        }
+
+        // 2b. Trivial messages (greetings/thanks/acks/emoji-only) can never have memory to
+        // recall: skip the embedding + vector search + recall audit entirely. Distinct from
+        // MemoryStatus.NoResult — no recall ran, so no no-memory suffix is appended.
+        var skipRecall = RecallTrivialityGate.ShouldSkipRecall(text);
+        if (skipRecall)
+        {
+            _logger.LogInformation(
+                "recall.skipped_trivial correlation_id={CorrelationId}", correlationId);
+        }
+
+        // 3. Fetch history and (unless skipped) recall in parallel. Raw mode: corroborated
+        // evidence is injected verbatim into the prompt — the main completion does the
+        // grounding, so recall's own synthesis LLM hop is removed from the reply path.
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(_options.LlmTimeoutSeconds));
 
+        Task<MemoryRecallOutcome>? recallTask = null;
         try
         {
             var historyTask = _historyStore.GetRecentAsync(
                 principal.TenantId, principal.UserId, _options.HistoryWindowSize, timeoutCts.Token);
 
-            var recallTask = _recallService.RecallAsync(
-                scope, text, correlationId, timeoutCts.Token);
+            recallTask = skipRecall
+                ? null
+                : _recallService.RecallAsync(
+                    scope, text, correlationId, RecallSynthesisMode.Raw, timeoutCts.Token);
 
-            await Task.WhenAll(historyTask, recallTask);
+            await (recallTask is null ? historyTask : Task.WhenAll(historyTask, recallTask));
 
             var history = historyTask.Result;
-            var recallOutcome = recallTask.Result;
-            var recall = recallOutcome.Status != MemoryStatus.NoResult ? recallOutcome.Recall : null;
+            var recallOutcome = recallTask?.Result;
+            var recall = recallOutcome is not null && recallOutcome.Status != MemoryStatus.NoResult
+                ? recallOutcome.Recall
+                : null;
 
-            // 3a. Link save intent: bypass LLM, confirm save (memory ingestion already ran above).
-            if (LinkCanonicalization.IsLinkSaveIntent(text))
-            {
-                var url = LinkCanonicalization.ExtractFirstUrl(text)!;
-                var label = LinkCanonicalization.ExtractLabelText(text, url)?.Trim();
-                var saveReply = string.IsNullOrWhiteSpace(label)
-                    ? $"Guardado 🔗\n{url}"
-                    : $"Guardado 🔗 *{label}*\n{url}";
-                await SendResponseAsync(
-                    phoneNumberId, recipientWaId,
-                    saveReply, OutboundStatus.Delivered,
-                    errorReason: null,
-                    principal, correlationId, ct);
-                return new AgentHandleResult(true, OutcomeCode: "link_saved");
-            }
-
-            // 3. Build prompt and call LLM.
+            // 4. Build prompt and call LLM. Output is capped: WhatsApp replies are short,
+            // and an unbounded completion is a direct time-to-reply cost.
             var isFirstMessage = history.Count == 0;
             var systemPrompt = _promptBuilder.BuildSystemPrompt(
                 isFirstMessage ? _options.OnboardingInstruction : null);
             var userPrompt = _promptBuilder.BuildUserPrompt(text, history, recall);
 
-            var responseText = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, timeoutCts.Token);
+            var responseText = await _chatRouter.CompleteAsync(
+                systemPrompt, userPrompt, ReplySettings, timeoutCts.Token);
 
             if (string.IsNullOrWhiteSpace(responseText))
             {
                 responseText = _options.ErrorFallbackMessage;
             }
 
-            // Append suffix when memory has no relevant data.
-            if (recallOutcome.Status == MemoryStatus.NoResult
+            // Append suffix only when recall actually ran and found no relevant data.
+            if (recallOutcome is { Status: MemoryStatus.NoResult }
                 && !isFirstMessage
                 && !responseText.Contains(_options.NoMemoryMessageSuffix, StringComparison.OrdinalIgnoreCase))
             {
                 responseText += _options.NoMemoryMessageSuffix;
             }
 
-            // 4. Send response.
+            // 5. Send response, then join the recall audit write (WORM: started inside
+            // RecallAsync, must be persisted before the webhook returns 200).
             await SendResponseAsync(
                 phoneNumberId, recipientWaId,
                 responseText, OutboundStatus.Delivered,
                 errorReason: null,
                 principal, correlationId, ct);
+
+            await JoinRecallAuditAsync(recallTask);
 
             return new AgentHandleResult(true, OutcomeCode: "responded");
         }
@@ -310,7 +333,32 @@ public sealed class ConversationalResponseAgent : IDomainAgent
                 errorReason: ex.Message,
                 principal, correlationId, CancellationToken.None);
 
+            await JoinRecallAuditAsync(recallTask);
+
             return new AgentHandleResult(false, ErrorCode: "response_failed", ErrorMessage: ex.Message);
+        }
+    }
+
+    // Cap generous enough for any WhatsApp reply (and for router-selected reasoning
+    // models whose thinking tokens share the budget) while bounding worst-case latency.
+    private static readonly ChatCallSettings ReplySettings = new(MaxOutputTokens: 800);
+
+    /// <summary>
+    /// Awaits the recall audit write that RecallAsync started (fire-then-join WORM
+    /// pattern). Never throws: the audit task itself never faults, and a recall task
+    /// that failed/cancelled has no audit to join.
+    /// </summary>
+    private static async Task JoinRecallAuditAsync(Task<MemoryRecallOutcome>? recallTask)
+    {
+        if (recallTask is null) return;
+        try
+        {
+            var outcome = await recallTask;
+            await outcome.AuditCompletion;
+        }
+        catch
+        {
+            // Recall itself failed or was cancelled before producing an outcome.
         }
     }
 

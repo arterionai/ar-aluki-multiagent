@@ -1,5 +1,7 @@
+using System.ClientModel.Primitives;
 using System.Globalization;
 using System.Text;
+using Aluki.Runtime.Memory.Chat;
 using Azure;
 using Azure.AI.OpenAI;
 using Microsoft.Extensions.Configuration;
@@ -31,7 +33,13 @@ public sealed class AzureOpenAIEmbeddingClient : IEmbeddingClient
                 ?? throw new InvalidOperationException("AiExtraction:Endpoint is not configured.");
             var apiKey = configuration["AiExtraction:ApiKey"]
                 ?? throw new InvalidOperationException("AiExtraction:ApiKey is not configured.");
-            return new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
+            var options = new AzureOpenAIClientOptions
+            {
+                // Shared bounded-lifetime handler: avoids the stale-idle-connection
+                // stall on the first embedding call after an idle period.
+                Transport = new HttpClientPipelineTransport(AzureAiSharedHttp.Client)
+            };
+            return new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey), options);
         });
     }
 

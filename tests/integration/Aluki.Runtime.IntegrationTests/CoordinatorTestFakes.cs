@@ -140,13 +140,15 @@ internal sealed class FakeCaptureUnitOfWork : ICaptureUnitOfWork
 internal sealed class FakeCaptureUnitOfWorkFactory : ICaptureUnitOfWorkFactory
 {
     private readonly int _failuresBeforeSuccess;
+    private readonly int? _failFromCall;
     private readonly bool _isNew;
     private int _beginCalls;
 
-    public FakeCaptureUnitOfWorkFactory(int failuresBeforeSuccess = 0, bool isNew = true)
+    public FakeCaptureUnitOfWorkFactory(int failuresBeforeSuccess = 0, bool isNew = true, int? failFromCall = null)
     {
         _failuresBeforeSuccess = failuresBeforeSuccess;
         _isNew = isNew;
+        _failFromCall = failFromCall;
     }
 
     public int PersistenceAttempts => _beginCalls;
@@ -156,7 +158,7 @@ internal sealed class FakeCaptureUnitOfWorkFactory : ICaptureUnitOfWorkFactory
     public Task<ICaptureUnitOfWork> BeginAsync(PrincipalContext principal, CancellationToken cancellationToken)
     {
         _beginCalls++;
-        if (_beginCalls <= _failuresBeforeSuccess)
+        if (_beginCalls <= _failuresBeforeSuccess || (_failFromCall is { } from && _beginCalls >= from))
         {
             throw new TimeoutException($"Simulated transient failure #{_beginCalls}.");
         }
@@ -170,5 +172,26 @@ internal sealed class FakeCaptureUnitOfWorkFactory : ICaptureUnitOfWorkFactory
         var uow = new FakeCaptureUnitOfWork(_isNew);
         AuditUnits.Add(uow);
         return Task.FromResult<ICaptureUnitOfWork>(uow);
+    }
+}
+
+internal sealed class RecordingMessageDispatcher : Abstractions.Orchestration.Dispatch.IMessageDispatcher
+{
+    private int _dispatchCount;
+
+    public int DispatchCount => _dispatchCount;
+
+    public Task<Abstractions.Orchestration.Dispatch.DispatchResult> DispatchAsync(
+        Abstractions.Orchestration.Dispatch.UnifiedMessage message,
+        PrincipalContext principal,
+        CancellationToken ct)
+    {
+        Interlocked.Increment(ref _dispatchCount);
+        return Task.FromResult(new Abstractions.Orchestration.Dispatch.DispatchResult(
+            Outcome: Abstractions.Orchestration.Dispatch.DispatchOutcome.Dispatched,
+            SelectedAgentId: "recording.agent",
+            FallbackUsed: false,
+            FallbackReason: null,
+            AuditEventId: Guid.NewGuid()));
     }
 }

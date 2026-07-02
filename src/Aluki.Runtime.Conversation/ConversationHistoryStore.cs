@@ -23,18 +23,11 @@ public sealed class ConversationHistoryStore : IConversationHistoryStore
     {
         await using var conn = await _factory.OpenAsync(cancellationToken);
 
-        // Set RLS context so the policies apply correctly.
-        await using (var setTenant = new NpgsqlCommand(
-            "select set_config('app.current_tenant_id', @tid, true)",
-            conn))
-        {
-            setTenant.Parameters.Add(new NpgsqlParameter("tid", NpgsqlDbType.Text)
-            {
-                Value = tenantId.ToString()
-            });
-            await setTenant.ExecuteScalarAsync(cancellationToken);
-        }
-
+        // Tenant/user isolation on this query is enforced by the explicit WHERE
+        // filters below. (A previous set_config here used a mis-named GUC —
+        // 'app.current_tenant_id' vs the RLS policies' 'app.current_tenant' — and
+        // ran transaction-local outside a transaction, so it never had any effect;
+        // it only cost a round-trip on the hot reply path.)
         const string sql = """
             select body, direction, created_at
             from (

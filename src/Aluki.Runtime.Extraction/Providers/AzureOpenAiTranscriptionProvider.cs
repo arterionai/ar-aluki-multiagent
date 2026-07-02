@@ -1,3 +1,5 @@
+using System.ClientModel.Primitives;
+using Aluki.Runtime.Memory.Chat;
 using Azure;
 using Azure.AI.OpenAI;
 using Microsoft.Extensions.Configuration;
@@ -30,7 +32,13 @@ public sealed class AzureOpenAiTranscriptionProvider : ITranscriptionProvider
             ?? configuration["AiExtraction:ApiKey"]
             ?? throw new InvalidOperationException("Extraction:Transcription:ApiKey (or AiExtraction:ApiKey) is not configured.");
         _deployment = configuration["Extraction:Transcription:Deployment"] ?? "whisper";
-        _client = new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
+        var options = new AzureOpenAIClientOptions
+        {
+            // Shared bounded-lifetime handler: avoids the stale-idle-connection stall
+            // on the first transcription after an idle period (audio hot path).
+            Transport = new HttpClientPipelineTransport(AzureAiSharedHttp.Client)
+        };
+        _client = new AzureOpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey), options);
     }
 
     public async Task<TranscriptionOutput> TranscribeAsync(

@@ -148,7 +148,7 @@ jobs:
           psql -v ON_ERROR_STOP=1 -c \
             "create table if not exists schema_migrations (filename text primary key, applied_at timestamptz not null default now());"
 
-          for f in 001_init_tenancy 002_init_artifacts 003_enable_rls 004_whatsapp_capture_foundation 005_whatsapp_capture_rls 006_document_support 007_personal_memory 008_calendar_integration 009_ai_extraction 010_reminders 011_reminder_retries 012_delegated_reminders 013_link_capture 014_youtube_link_capture 015_feedback_suggestions 016_suggestions_admin 017_dispatch_audit 018_governance_security 019_semantic_graph 020_conversational_response 021_billing 022_calendar_oauth_tokens 023_ai_usage_log 024_audit_sender_tracking 025_dispatch_retry_queue 026_shelo_nabel_seed; do
+          for f in 001_init_tenancy 002_init_artifacts 003_enable_rls 004_whatsapp_capture_foundation 005_whatsapp_capture_rls 006_document_support 007_personal_memory 008_calendar_integration 009_ai_extraction 010_reminders 011_reminder_retries 012_delegated_reminders 013_link_capture 014_youtube_link_capture 015_feedback_suggestions 016_suggestions_admin 017_dispatch_audit 018_governance_security 019_semantic_graph 020_conversational_response 021_billing 022_calendar_oauth_tokens 023_ai_usage_log 024_audit_sender_tracking 025_dispatch_retry_queue 026_shelo_nabel_seed 027_memory_artifact_hnsw; do
             applied="$(psql -tA -c "select 1 from schema_migrations where filename = '$f';")"
             if [ "$applied" = "1" ]; then
               echo "skip $f (already applied)"
@@ -190,8 +190,12 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # ReadyToRun pre-compiles the hot path (Npgsql, Azure SDKs, the 11 capability
+      # assemblies) so cold starts skip most JIT work. Framework-dependent + RID:
+      # assumes the Function App runs on Linux (verify with
+      # `az functionapp show -n func-araluki-dev-6155 -g ar-Aluki --query kind`).
       - name: Publish Function project
-        run: dotnet publish src/Aluki.Runtime.Functions/Aluki.Runtime.Functions.csproj --configuration Release --output publish
+        run: dotnet publish src/Aluki.Runtime.Functions/Aluki.Runtime.Functions.csproj --configuration Release --output publish -r linux-x64 --self-contained false -p:PublishReadyToRun=true
 
       - name: Package Function App
         shell: bash

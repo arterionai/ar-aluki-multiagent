@@ -175,19 +175,26 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
 
+        // Fire-then-join for the recall audit writes (WORM): started inside RecallAsync,
+        // joined after the reply is sent, before this agent returns.
+        var recallAuditJoin = Task.CompletedTask;
+
         try
         {
             // Load history + two parallel recalls: (1) by current message, (2) by customer profile
             // query so stored facts (skin type, age, purchase history) surface even when the
             // current message doesn't semantically resemble them ("recomiéndame algo").
+            // Raw mode: the main completion re-reasons over the claims, so recall's own
+            // synthesis LLM hop is removed from the reply path.
             var historyTask = _historyStore.GetRecentAsync(
                 principal.TenantId, principal.UserId, limit: 10, timeoutCts.Token);
             var recallTask = _recallService.RecallAsync(
-                scope, text, correlationId, timeoutCts.Token);
+                scope, text, correlationId, RecallSynthesisMode.Raw, timeoutCts.Token);
             var profileRecallTask = _recallService.RecallAsync(
                 scope,
                 "perfil cliente nombre tipo piel edad historial compras productos preferencias",
                 correlationId + "_profile",
+                RecallSynthesisMode.Raw,
                 timeoutCts.Token);
 
             await Task.WhenAll(historyTask, recallTask, profileRecallTask);
@@ -195,6 +202,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
             var history = historyTask.Result;
             var recallOutcome = recallTask.Result;
             var profileOutcome = profileRecallTask.Result;
+            recallAuditJoin = Task.WhenAll(recallOutcome.AuditCompletion, profileOutcome.AuditCompletion);
 
             var recall = recallOutcome.Status != MemoryStatus.NoResult ? recallOutcome.Recall : null;
             var profileRecall = profileOutcome.Status != MemoryStatus.NoResult ? profileOutcome.Recall : null;
@@ -207,19 +215,23 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
             // --- Path 1: Reminder intent — create reminder + product recommendations ---
             if (ReminderSchedulingDetector.LooksLikeReminder(text))
             {
-                return await HandleReminderWithRecommendationAsync(
+                var reminderResult = await HandleReminderWithRecommendationAsync(
                     text, principal, scope, systemPrompt, history,
                     phoneNumberId, recipientWaId, correlationId,
                     timeoutCts.Token);
+                await recallAuditJoin;
+                return reminderResult;
             }
 
             // --- Path 2: Sale record — auto-create 30-day reorder reminder + next order suggestions ---
             if (SheloNabelSaleDetector.LooksLikeSaleRecord(text))
             {
-                return await HandleSaleRecordAsync(
+                var saleResult = await HandleSaleRecordAsync(
                     text, principal, scope, systemPrompt, history,
                     phoneNumberId, recipientWaId, correlationId,
                     timeoutCts.Token);
+                await recallAuditJoin;
+                return saleResult;
             }
 
             // --- Path 3a: Link save intent — bypass LLM, confirm save briefly ---
@@ -231,12 +243,14 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
                     ? $"Guardado 🔗\n{url}"
                     : $"Guardado 🔗 *{label}*\n{url}";
                 await SendResponseAsync(phoneNumberId, recipientWaId, saveReply, principal, correlationId);
+                await recallAuditJoin;
                 return new AgentHandleResult(true, OutcomeCode: "link_saved");
             }
 
             // --- Path 3: General product/customer query or script request ---
             var userPrompt = _promptBuilder.BuildQueryUserPrompt(text, recall, history);
-            var response = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, timeoutCts.Token);
+            var response = await _chatRouter.CompleteAsync(
+                systemPrompt, userPrompt, ReplySettings, timeoutCts.Token);
 
             if (string.IsNullOrWhiteSpace(response))
                 response = "Tuve un problema al procesar tu mensaje, inténtalo de nuevo 🙏";
@@ -244,6 +258,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
             await SendResponseAsync(
                 phoneNumberId, recipientWaId, response,
                 principal, correlationId);
+            await recallAuditJoin;
             return new AgentHandleResult(true, OutcomeCode: "shelo_response");
         }
         catch (Exception ex)
@@ -257,9 +272,14 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
                 "Tuve un problema al procesar tu mensaje, inténtalo de nuevo 🙏",
                 CancellationToken.None);
 
+            await recallAuditJoin;
             return new AgentHandleResult(false, ErrorCode: "shelo_exception", ErrorMessage: ex.Message);
         }
     }
+
+    // Cap generous enough for any WhatsApp reply (and for router-selected reasoning
+    // models whose thinking tokens share the budget) while bounding worst-case latency.
+    private static readonly ChatCallSettings ReplySettings = new(MaxOutputTokens: 800);
 
     // --- Reminder + product recommendation ---
 
@@ -315,7 +335,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
 
         var userPrompt = _promptBuilder.BuildReminderUserPrompt(text, reminderStatus, history);
         using var llmCtsr = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-        var recommendation = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, llmCtsr.Token);
+        var recommendation = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, ReplySettings, llmCtsr.Token);
 
         if (string.IsNullOrWhiteSpace(recommendation))
             recommendation = reminderStatus;
@@ -374,7 +394,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
 
         var userPrompt = _promptBuilder.BuildSaleUserPrompt(text, reorderStatus, history);
         using var llmCtss = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-        var response = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, llmCtss.Token);
+        var response = await _chatRouter.CompleteAsync(systemPrompt, userPrompt, ReplySettings, llmCtss.Token);
 
         if (string.IsNullOrWhiteSpace(response))
             response = reorderStatus;
@@ -460,9 +480,11 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
             using var tzCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, tzCts.Token);
 
+            // Raw mode: city-name regexing works on verbatim notes; no synthesis LLM needed.
             var outcome = await _recallService.RecallAsync(
                 scope, "¿En qué ciudad o zona horaria vive este usuario?",
-                correlationId, linked.Token);
+                correlationId, RecallSynthesisMode.Raw, linked.Token);
+            await outcome.AuditCompletion;
 
             if (outcome.Recall?.Claims is { Count: > 0 } claims)
             {

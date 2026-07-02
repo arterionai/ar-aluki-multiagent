@@ -71,6 +71,8 @@ public sealed class MemoryInteractionCoordinator
         if (intent == MemoryIntent.RecallQuery)
         {
             var outcome = await _recallService.RecallAsync(principal, request.InputText!, correlationId, cancellationToken);
+            // HTTP semantics: the recall audit write must be durable before the response returns.
+            await outcome.AuditCompletion;
             return Ok(new MemoryInteractionResponse(correlationId, intent, outcome.Status, Recall: outcome.Recall));
         }
 

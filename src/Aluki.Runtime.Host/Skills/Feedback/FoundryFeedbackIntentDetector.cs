@@ -20,7 +20,10 @@ internal sealed class FoundryFeedbackIntentDetector(
         try
         {
             using var llmCts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-            var response = await chatRouter.CompleteAsync(SystemPrompt, text, llmCts.Token);
+            // Small cap: a YES/NO answer never needs more (headroom left for
+            // router-selected reasoning models whose thinking shares the budget).
+            var response = await chatRouter.CompleteAsync(
+                SystemPrompt, text, new ChatCallSettings(MaxOutputTokens: 100), llmCts.Token);
             ct.ThrowIfCancellationRequested();
             return response.Trim().StartsWith("YES", StringComparison.OrdinalIgnoreCase);
         }
