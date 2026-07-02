@@ -300,6 +300,14 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
         string reminderStatus;
         if (parsed.Success && parsed.ScheduledTimeUtc is not null)
         {
+            var scheduledUtc = parsed.ScheduledTimeUtc.Value;
+            if (!parsed.TimeExplicit && scheduledUtc <= DateTimeOffset.UtcNow)
+            {
+                // The assumed default hour already passed (e.g. "recuérdame hoy…" sent in
+                // the evening). Roll forward deterministically instead of failing creation.
+                scheduledUtc = DateTimeOffset.UtcNow.AddHours(1);
+            }
+
             var deliveryChannel = $"whatsapp:{phoneNumberId}:{recipientWaId}";
             var request = new CreateReminderRequest(
                 ReminderId: null,
@@ -309,7 +317,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
                     ContextId: principal.ContextId,
                     UserId: principal.UserId),
                 ReminderText: parsed.ReminderText,
-                ScheduledTimeUtc: parsed.ScheduledTimeUtc,
+                ScheduledTimeUtc: scheduledUtc,
                 Timezone: timezone,
                 ReminderType: ReminderType.OneShot,
                 Recurrence: null,
@@ -317,7 +325,7 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
 
             var result = await _reminderService.CreateAsync(request, ct);
             reminderStatus = result.StatusCode is 200 or 201
-                ? BuildReminderConfirmation(parsed.ReminderText!, parsed.ScheduledTimeUtc!.Value, timezone)
+                ? BuildReminderConfirmation(parsed.ReminderText!, scheduledUtc, timezone, timeAssumed: !parsed.TimeExplicit)
                 : "⚠️ No pude crear el recordatorio (inténtalo de nuevo si es urgente).";
         }
         else
@@ -543,9 +551,12 @@ public sealed class SheloNabelDomainAgent : IDomainAgent
     }
 
     private static string BuildReminderConfirmation(
-        string reminderText, DateTimeOffset scheduledUtc, string timezone)
+        string reminderText, DateTimeOffset scheduledUtc, string timezone, bool timeAssumed)
     {
-        return $"✅ Recordatorio creado: «{reminderText}» — {ConvertToLocalTime(scheduledUtc, timezone)}";
+        var confirmation = $"✅ Recordatorio creado: «{reminderText}» — {ConvertToLocalTime(scheduledUtc, timezone)}";
+        if (timeAssumed)
+            confirmation += " (asumí esa hora porque no especificaste una — si prefieres otra, dime y lo ajusto 🕘)";
+        return confirmation;
     }
 
     private static string ConvertToLocalTime(DateTimeOffset utc, string timezone)

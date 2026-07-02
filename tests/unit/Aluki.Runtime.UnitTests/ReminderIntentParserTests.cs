@@ -1,6 +1,8 @@
 using Aluki.Runtime.Memory.Chat;
+using Aluki.Runtime.Reminders.Configuration;
 using Aluki.Runtime.Reminders.Dispatch;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Aluki.Runtime.UnitTests;
@@ -198,6 +200,77 @@ public sealed class ReminderIntentParserTests
         Assert.True(result.ScheduledTimeUtc < Now);
     }
 
+    // ── 11. time_explicit flag — default-hour transparency ────────────────────
+
+    [Fact]
+    public async Task ParseAsync_TimeExplicitFalse_is_surfaced()
+    {
+        // "recuérdame mañana pagar mis tarjetas" → the LLM applies the default hour
+        // (09:00 local) and flags it so the agent can tell the user the hour was assumed.
+        const string json = """{"reminder_text": "pagar mis tarjetas", "scheduled_time_utc": "2026-07-02T15:00:00Z", "time_explicit": false}""";
+        var parser = BuildParser(json);
+
+        var result = await parser.ParseAsync("recuérdame mañana pagar mis tarjetas", Now, Timezone, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.False(result.TimeExplicit);
+    }
+
+    [Fact]
+    public async Task ParseAsync_TimeExplicitTrue_is_surfaced()
+    {
+        const string json = """{"reminder_text": "pagar mis tarjetas", "scheduled_time_utc": "2026-07-02T21:00:00Z", "time_explicit": true}""";
+        var parser = BuildParser(json);
+
+        var result = await parser.ParseAsync("recuérdame mañana a las 3pm pagar mis tarjetas", Now, Timezone, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.True(result.TimeExplicit);
+    }
+
+    [Fact]
+    public async Task ParseAsync_TimeExplicitMissing_defaults_to_true()
+    {
+        // Backward compatibility: older model responses carry only the two original fields.
+        const string json = """{"reminder_text": "comprar leche", "scheduled_time_utc": "2026-07-02T16:00:00Z"}""";
+        var parser = BuildParser(json);
+
+        var result = await parser.ParseAsync("recuérdame comprar leche mañana", Now, Timezone, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.True(result.TimeExplicit);
+    }
+
+    // ── 12. Configured default hours flow into the system prompt ──────────────
+
+    [Fact]
+    public async Task ParseAsync_ConfiguredDefaultHours_appear_in_system_prompt()
+    {
+        const string json = """{"reminder_text": "test", "scheduled_time_utc": "2026-07-02T10:00:00Z", "time_explicit": false}""";
+        var router = new StubChatModelRouter(json);
+        var options = Options.Create(new ReminderOptions
+        {
+            DefaultHourLocal = 8,
+            MorningHourLocal = 7,
+            MiddayHourLocal = 13,
+            AfternoonHourLocal = 17,
+            EveningHourLocal = 21,
+        });
+        var parser = new ReminderIntentParser(router, NullLogger<ReminderIntentParser>.Instance, options);
+
+        var result = await parser.ParseAsync("recuérdame mañana pagar mis tarjetas", Now, Timezone, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(router.LastSystemPrompt);
+        Assert.Contains("time_explicit", router.LastSystemPrompt);
+        Assert.Contains("08:00", router.LastSystemPrompt); // date without time
+        Assert.Contains("07:00", router.LastSystemPrompt); // morning
+        Assert.Contains("13:00", router.LastSystemPrompt); // midday
+        Assert.Contains("17:00", router.LastSystemPrompt); // afternoon
+        Assert.Contains("21:00", router.LastSystemPrompt); // evening
+        Assert.Contains(Timezone, router.LastSystemPrompt);
+    }
+
     // ── SystemPromptTemplate regression: string.Format with timezone ──────────
 
     [Fact]
@@ -223,10 +296,12 @@ public sealed class ReminderIntentParserTests
 file sealed class StubChatModelRouter(string reply) : IChatModelRouter
 {
     public int CallCount { get; private set; }
+    public string? LastSystemPrompt { get; private set; }
 
     public Task<string> CompleteAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
     {
         CallCount++;
+        LastSystemPrompt = systemPrompt;
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(reply);
     }

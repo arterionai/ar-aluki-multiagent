@@ -2,7 +2,9 @@ using Aluki.Runtime.Abstractions.Conversation;
 using Aluki.Runtime.Abstractions.Memory;
 using Aluki.Runtime.Abstractions.Orchestration.Dispatch;
 using Aluki.Runtime.Abstractions.Security;
+using Aluki.Runtime.Abstractions.SemanticGraph;
 using Aluki.Runtime.Capture.Channels.WhatsApp;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aluki.Runtime.Memory.Dispatch;
@@ -28,17 +30,20 @@ public sealed class PersonMemoryDomainAgent : IDomainAgent
     private readonly IWhatsAppMessenger _messenger;
     private readonly IOutboundMessageStore _outboundStore;
     private readonly ILogger<PersonMemoryDomainAgent> _logger;
+    private readonly IServiceScopeFactory? _scopeFactory;
 
     public PersonMemoryDomainAgent(
         IMemoryIngestionSink sink,
         IWhatsAppMessenger messenger,
         IOutboundMessageStore outboundStore,
-        ILogger<PersonMemoryDomainAgent> logger)
+        ILogger<PersonMemoryDomainAgent> logger,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _sink = sink;
         _messenger = messenger;
         _outboundStore = outboundStore;
         _logger = logger;
+        _scopeFactory = scopeFactory;
     }
 
     public string AgentId => Id;
@@ -86,6 +91,10 @@ public sealed class PersonMemoryDomainAgent : IDomainAgent
                 message.MessageId);
         }
 
+        // SB-015: populate the semantic graph from the note — fire-and-forget,
+        // never on the reply path; hosts without AddSemanticGraph() simply skip.
+        StartEntityResolution(principal.TenantId, text, correlationId);
+
         // Confirmation reply (CancellationToken.None: reply must reach the user even
         // if the webhook CancellationToken has already fired).
         var preview = text.Length <= 200 ? text : text[..200] + "…";
@@ -126,5 +135,35 @@ public sealed class PersonMemoryDomainAgent : IDomainAgent
         }
 
         return new AgentHandleResult(true, OutcomeCode: "person_note_saved");
+    }
+
+    private void StartEntityResolution(Guid tenantId, string noteText, string correlationId)
+    {
+        if (_scopeFactory is null)
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var resolver = scope.ServiceProvider.GetService<IEntityResolutionService>();
+                if (resolver is null)
+                    return;
+
+                // Standalone CTS: the LLM-backed resolution outlives the webhook lifecycle.
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+                await resolver.ResolveAsync(
+                    new ResolveEntitiesRequest(tenantId, noteText, FactIds: null, CorrelationId: correlationId),
+                    cts.Token);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "PersonMemoryDomainAgent entity resolution failed. correlation_id={CorrelationId}",
+                    correlationId);
+            }
+        });
     }
 }
