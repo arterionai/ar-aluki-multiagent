@@ -37,7 +37,8 @@ internal static class CoordinatorTestHarness
         FakeCaptureUnitOfWorkFactory factory,
         PrincipalContext principal,
         int maxAttempts = 5,
-        bool consentStop = false)
+        bool consentStop = false,
+        Abstractions.Orchestration.Dispatch.IMessageDispatcher? dispatcher = null)
     {
         var resolver = new FakePrincipalContextResolver(PrincipalResolution.Allow(principal));
         var retryPolicy = new CaptureRetryPolicy(Options.Create(new CaptureOptions
@@ -70,7 +71,7 @@ internal static class CoordinatorTestHarness
             writeScopeDenied,
             writeRetry,
             new NullMediaDownloadQueue(),
-            new NullMessageDispatcher(),
+            dispatcher ?? new NullMessageDispatcher(),
             NullLogger<WhatsAppCaptureCoordinator>.Instance);
     }
 }

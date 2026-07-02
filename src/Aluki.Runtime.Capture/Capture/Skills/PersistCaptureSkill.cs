@@ -65,7 +65,11 @@ public sealed class PersistCaptureSkill : CaptureSkill
                 ProvenanceEventId: eventId,
                 AcknowledgedAtUtc: now,
                 CaptureStatus: CapturePersistedStatus.Accepted,
-                CreatedAtUtc: now),
+                // Provider receipt time, not insert time: persistence now runs in
+                // parallel with (or after) reply generation, and conversation history
+                // orders by created_at_utc — the inbound row must always sort before
+                // the outbound reply it triggered.
+                CreatedAtUtc: normalized.ReceivedAtUtc),
             cancellationToken);
 
         if (normalized.Media is { } media)

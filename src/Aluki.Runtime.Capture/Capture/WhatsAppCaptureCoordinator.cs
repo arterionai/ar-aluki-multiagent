@@ -173,69 +173,81 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
             await RunSkillAsync(_normalize, state, cancellationToken);
         }
 
-        // Stage 4: idempotent transactional persistence with bounded retry.
-        return await PersistWithRetryAsync(state, providerMessageId, cancellationToken);
+        // Stage 4: claim-first pipeline — idempotency claim in a short transaction,
+        // then artifact persistence runs in PARALLEL with domain-agent dispatch and is
+        // joined before returning, so the user-visible reply is not blocked behind the
+        // capture inserts (it overlaps with the multi-second LLM call instead).
+        return await ClaimDispatchPersistAsync(state, providerMessageId, cancellationToken);
     }
 
-    private async Task<CaptureOutcome> PersistWithRetryAsync(
+    private async Task<CaptureOutcome> ClaimDispatchPersistAsync(
         CapturePipelineState state,
         string providerMessageId,
         CancellationToken cancellationToken)
     {
         var principal = state.Principal;
 
-        for (var attempt = 1; attempt <= _retryPolicy.MaxAttempts; attempt++)
+        // Phase A: idempotency claim with bounded retry. The claim MUST commit before
+        // dispatch so a Meta redelivery can never produce a second user-visible reply.
+        var claimed = false;
+        for (var attempt = 1; attempt <= _retryPolicy.MaxAttempts && !claimed; attempt++)
         {
             state.AttemptNumber = attempt;
             try
             {
-                return await RunPersistenceAttemptAsync(state, cancellationToken);
+                var duplicateOutcome = await RunClaimAttemptAsync(state, cancellationToken);
+                if (duplicateOutcome is not null)
+                {
+                    return duplicateOutcome;
+                }
+
+                claimed = true;
             }
             catch (Exception ex) when (CaptureRetryPolicy.IsTransient(ex) && _retryPolicy.HasAttemptsRemaining(attempt))
             {
-                _logger.LogWarning(
-                    ex,
-                    "Transient capture failure (attempt {Attempt}/{Max}). correlation_id={CorrelationId}",
-                    attempt,
-                    _retryPolicy.MaxAttempts,
-                    state.CorrelationId);
-
-                _telemetry.RecordRetry(attempt, CaptureObservability.FailureCategory.Transient);
-                using (_telemetry.BeginStage(CaptureObservability.Stage.RetrySchedule, state.CorrelationId, principal.TenantId))
-                {
-                    await _writeRetryAudit.WriteRetryScheduledAsync(
-                        principal, providerMessageId, attempt, CaptureObservability.FailureCategory.Transient, cancellationToken);
-                }
-
-                await Task.Delay(_retryPolicy.ComputeDelay(attempt), cancellationToken);
+                await HandleTransientAsync(ex, state, providerMessageId, attempt, cancellationToken);
             }
             catch (Exception ex)
             {
-                var category = CaptureRetryPolicy.IsTransient(ex)
-                    ? CaptureObservability.FailureCategory.Transient
-                    : CaptureObservability.FailureCategory.Permanent;
-
-                _logger.LogError(
-                    ex,
-                    "Terminal capture failure (attempt {Attempt}, category {Category}). correlation_id={CorrelationId}",
-                    attempt,
-                    category,
-                    state.CorrelationId);
-
-                return await TerminalFailureAsync(principal, providerMessageId, attempt, category, cancellationToken);
+                return await HandleTerminalAsync(ex, state, providerMessageId, attempt, cancellationToken);
             }
         }
 
-        // Retry budget exhausted without a successful attempt.
-        return await TerminalFailureAsync(
-            principal,
-            providerMessageId,
-            _retryPolicy.MaxAttempts,
-            CaptureObservability.FailureCategory.Transient,
-            cancellationToken);
+        if (!claimed)
+        {
+            // Retry budget exhausted without a successful claim.
+            return await TerminalFailureAsync(
+                principal,
+                providerMessageId,
+                _retryPolicy.MaxAttempts,
+                CaptureObservability.FailureCategory.Transient,
+                cancellationToken);
+        }
+
+        // Phase B: start artifact persistence in the background (own transaction and
+        // bounded retry). CancellationToken.None: the inserts and the WORM capture
+        // audit must complete even if the webhook connection closes while the LLM
+        // reply is being generated. Trade-off (documented in CLAUDE.md): a terminal
+        // persist failure leaves the claim committed, so a redelivery would be
+        // suppressed without persisted content — preferred over the alternative of a
+        // duplicate user-visible reply; WriteFailedTerminalAsync records it for replay.
+        var persistTask = PersistArtifactsWithRetryAsync(state, providerMessageId);
+
+        // Phase C: dispatch to domain agents immediately (best-effort; never fails
+        // capture). This is where the user-visible reply is produced.
+        await TryDispatchAsync(state, cancellationToken);
+
+        // Phase D: join persistence before returning so the capture audit is durable
+        // before the webhook returns 200.
+        return await persistTask;
     }
 
-    private async Task<CaptureOutcome> RunPersistenceAttemptAsync(
+    /// <summary>
+    /// One idempotency-claim attempt in its own short transaction. Returns the
+    /// duplicate-suppressed outcome when the message was already claimed (no
+    /// dispatch), or null when this delivery claimed the message as new.
+    /// </summary>
+    private async Task<CaptureOutcome?> RunClaimAttemptAsync(
         CapturePipelineState state,
         CancellationToken cancellationToken)
     {
@@ -263,21 +275,69 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
                 AttemptCount: state.AttemptNumber);
         }
 
+        await uow.CommitAsync(cancellationToken);
+        state.UnitOfWork = null;
+        return null;
+    }
+
+    /// <summary>
+    /// Persists the inbound/message/media artifacts + capture audit with bounded
+    /// retry, in parallel with dispatch. Runs entirely on CancellationToken.None
+    /// (see ClaimDispatchPersistAsync Phase B). Never throws.
+    /// </summary>
+    private async Task<CaptureOutcome> PersistArtifactsWithRetryAsync(
+        CapturePipelineState state,
+        string providerMessageId)
+    {
+        var principal = state.Principal;
+
+        for (var attempt = 1; attempt <= _retryPolicy.MaxAttempts; attempt++)
+        {
+            state.AttemptNumber = attempt;
+            try
+            {
+                return await RunPersistArtifactsAttemptAsync(state);
+            }
+            catch (Exception ex) when (CaptureRetryPolicy.IsTransient(ex) && _retryPolicy.HasAttemptsRemaining(attempt))
+            {
+                await HandleTransientAsync(ex, state, providerMessageId, attempt, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                return await HandleTerminalAsync(ex, state, providerMessageId, attempt, CancellationToken.None);
+            }
+        }
+
+        // Retry budget exhausted without a successful persist.
+        return await TerminalFailureAsync(
+            principal,
+            providerMessageId,
+            _retryPolicy.MaxAttempts,
+            CaptureObservability.FailureCategory.Transient,
+            CancellationToken.None);
+    }
+
+    private async Task<CaptureOutcome> RunPersistArtifactsAttemptAsync(CapturePipelineState state)
+    {
+        var principal = state.Principal;
+        await using var uow = await _unitOfWorkFactory.BeginAsync(principal, CancellationToken.None);
+        state.UnitOfWork = uow;
+
         using (_telemetry.BeginStage(CaptureObservability.Stage.Persist, state.CorrelationId, principal.TenantId))
         {
             if (state.IsUnsupported)
             {
-                await RunSkillAsync(_persistUnsupported, state, cancellationToken);
+                await RunSkillAsync(_persistUnsupported, state, CancellationToken.None);
             }
             else
             {
-                await RunSkillAsync(_persistCapture, state, cancellationToken);
+                await RunSkillAsync(_persistCapture, state, CancellationToken.None);
             }
 
-            await RunSkillAsync(_writeCaptureAudit, state, cancellationToken);
+            await RunSkillAsync(_writeCaptureAudit, state, CancellationToken.None);
         }
 
-        await uow.CommitAsync(cancellationToken);
+        await uow.CommitAsync(CancellationToken.None);
         _telemetry.RecordOutcome(CaptureObservability.Stage.Persist, CaptureObservability.Status.Success);
 
         // Queue async media binary download (best-effort; never fails the capture).
@@ -293,7 +353,7 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
                         pendingMedia.MediaId,
                         pendingMedia.ProviderMediaId,
                         pendingMedia.ContentType),
-                    cancellationToken);
+                    CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -305,9 +365,6 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
             }
         }
 
-        // Dispatch the normalized message to domain agents (best-effort; never fails capture).
-        await TryDispatchAsync(state, cancellationToken);
-
         var kind = state.IsUnsupported ? CaptureOutcomeKind.AcceptedUnsupported : CaptureOutcomeKind.Accepted;
         var auditEvent = state.IsUnsupported ? CaptureAuditEvent.UnsupportedPayload : CaptureAuditEvent.Accepted;
 
@@ -318,6 +375,53 @@ public sealed class WhatsAppCaptureCoordinator : IAgentCoordinator
             state.CanonicalMessageId,
             auditEvent,
             AttemptCount: state.AttemptNumber);
+    }
+
+    private async Task HandleTransientAsync(
+        Exception ex,
+        CapturePipelineState state,
+        string providerMessageId,
+        int attempt,
+        CancellationToken cancellationToken)
+    {
+        var principal = state.Principal;
+
+        _logger.LogWarning(
+            ex,
+            "Transient capture failure (attempt {Attempt}/{Max}). correlation_id={CorrelationId}",
+            attempt,
+            _retryPolicy.MaxAttempts,
+            state.CorrelationId);
+
+        _telemetry.RecordRetry(attempt, CaptureObservability.FailureCategory.Transient);
+        using (_telemetry.BeginStage(CaptureObservability.Stage.RetrySchedule, state.CorrelationId, principal.TenantId))
+        {
+            await _writeRetryAudit.WriteRetryScheduledAsync(
+                principal, providerMessageId, attempt, CaptureObservability.FailureCategory.Transient, cancellationToken);
+        }
+
+        await Task.Delay(_retryPolicy.ComputeDelay(attempt), cancellationToken);
+    }
+
+    private async Task<CaptureOutcome> HandleTerminalAsync(
+        Exception ex,
+        CapturePipelineState state,
+        string providerMessageId,
+        int attempt,
+        CancellationToken cancellationToken)
+    {
+        var category = CaptureRetryPolicy.IsTransient(ex)
+            ? CaptureObservability.FailureCategory.Transient
+            : CaptureObservability.FailureCategory.Permanent;
+
+        _logger.LogError(
+            ex,
+            "Terminal capture failure (attempt {Attempt}, category {Category}). correlation_id={CorrelationId}",
+            attempt,
+            category,
+            state.CorrelationId);
+
+        return await TerminalFailureAsync(state.Principal, providerMessageId, attempt, category, cancellationToken);
     }
 
     private async Task TryDispatchAsync(CapturePipelineState state, CancellationToken cancellationToken)
