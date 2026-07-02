@@ -32,6 +32,7 @@ public static class MemoryAuditEventName
     public const string RecallGrounded = "memory.recall_grounded";
     public const string RecallLowConfidence = "memory.recall_low_confidence";
     public const string RecallNoResult = "memory.recall_no_result";
+    public const string PersonLookup = "memory.person_lookup";
 }
 
 public sealed record PrincipalScope(

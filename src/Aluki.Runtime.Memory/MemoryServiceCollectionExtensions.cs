@@ -43,6 +43,11 @@ public static class MemoryServiceCollectionExtensions
         services.AddSingleton<PersonMemoryDomainAgent>();
         services.AddSingleton<IDomainAgent>(sp => sp.GetRequiredService<PersonMemoryDomainAgent>());
 
+        // Register the person-lookup domain agent (priority 58, after save, before reminders).
+        services.AddSingleton<IPersonLookupService, PersonLookupService>();
+        services.AddSingleton<PersonLookupDomainAgent>();
+        services.AddSingleton<IDomainAgent>(sp => sp.GetRequiredService<PersonLookupDomainAgent>());
+
         // Register the catch-all fallback domain agent (dispatched when no specific agent claims intent).
         services.AddSingleton<MemoryDomainAgent>();
         services.AddSingleton<IDomainAgent>(sp => sp.GetRequiredService<MemoryDomainAgent>());

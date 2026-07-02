@@ -301,6 +301,29 @@ documented intended behaviors without explicit instruction.
     `MemoryServiceCollectionExtensions.AddPersonalMemory()`.
   - **Tests**: `PersonNoteDetectorTests` (unit, 317 total) +
     `PersonMemoryDomainAgentContractTests` (contract, 211 total).
+- **SB-014 Person Lookup (Contact-Card Recall)** — done (not yet deployed). Spec at
+  `specs/014-person-lookup/spec.md`. No new migration — reads `memory_artifact` via
+  the existing `MemoryStore.SearchAsync`.
+  - **Problem solved**: "¿Quién es Fer?" went through the generic recall pipeline,
+    whose `CorroborationPolicy` requires ≥2 relevant artifacts; a single saved note
+    (the normal SB-013 case) fell to `LowConfidence` and the bot asked for
+    clarification instead of showing the note the user explicitly saved.
+  - **`PersonLookupDetector`** (`Aluki.Runtime.Memory/Dispatch/PersonLookupDetector.cs`):
+    pure static, accent-insensitive with an index map back to the original text so the
+    extracted name preserves accents/casing. Triggers: "quién es", "quiénes son",
+    "qué sabes de/sobre", "who is", "what do you know about". Save-intent text
+    (`PersonNoteDetector`) never claims lookup (defense in depth).
+  - **`IPersonLookupService`/`PersonLookupService`**: embeds the name (standalone CTS
+    15s), `MemoryStore.SearchAsync` topK 8, filters by `MemoryOptions.RelevanceMaxDistance`,
+    takes 5 — NO corroboration minimum, NO LLM. Writes recall audit
+    (`memory.person_lookup`, `CancellationToken.None`) with result
+    `person_lookup_answered|no_notes|error`.
+  - **`PersonLookupDomainAgent`**: priority 58 (between PersonMemory 55 and Reminder 60),
+    WhatsApp only. Reply: "📇 *{Nombre}*\n• {nota}…" (notes truncated at 150 chars),
+    zero matches ⇒ save hint, failure ⇒ graceful fallback. Sends and outbound persist
+    with `CancellationToken.None`. Registered in `AddPersonalMemory()`.
+  - **Tests**: `PersonLookupDetectorTests` (unit) + `PersonLookupDomainAgentContractTests`
+    (contract). 569 total (340 unit + 229 contract).
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 
