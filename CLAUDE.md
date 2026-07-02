@@ -301,6 +301,85 @@ documented intended behaviors without explicit instruction.
     `MemoryServiceCollectionExtensions.AddPersonalMemory()`.
   - **Tests**: `PersonNoteDetectorTests` (unit, 317 total) +
     `PersonMemoryDomainAgentContractTests` (contract, 211 total).
+- **SB-014 Reply-latency fast path** — done (not yet deployed; branch
+  `claude/aluki-response-speed-ykqixv`). Cross-cutting perf work so the FIRST
+  user-visible WhatsApp reply is fast without losing intelligence (corroboration ≥2,
+  citations, hardened prompts all unchanged). Migration `027_memory_artifact_hnsw.sql`
+  (HNSW cosine index on `memory_artifact.embedding`; requires pgvector ≥ 0.5.0 —
+  wired into the workflow loop AND `DbCaptureFixture`).
+  - **Recall raw mode** (`RecallSynthesisMode` in `Aluki.Runtime.Memory/Recall/
+    MemoryRecallService.cs`): WhatsApp reply paths (`ConversationalResponseAgent`,
+    `SheloNabelDomainAgent`, `ReminderDomainAgent`) pass `Raw` — corroborated
+    evidence is injected verbatim via `MemoryRecallResponseAssembler.AssembleGroundedRaw`
+    (one confirmed claim per candidate, own citation) and the MAIN completion does the
+    grounding; the serial recall-synthesis LLM hop was removed from the reply path.
+    The memory HTTP API (`MemoryInteractionCoordinator`) keeps `Synthesized` mode
+    (there the synthesized answer IS the user-visible payload).
+  - **WORM fire-then-join pattern** (recall audit): `RecallAsync` STARTS
+    `WriteRecallAuditAsync` (CancellationToken.None) without awaiting and exposes it
+    as `MemoryRecallOutcome.AuditCompletion`; agents await it AFTER the WhatsApp send,
+    before returning from `HandleAsync` — the audit is always durable before the
+    webhook 200 while overlapping the LLM instead of preceding it. The same pattern
+    governs capture persistence (below). Do NOT convert these to pure fire-and-forget.
+  - **`RecallTrivialityGate`** (`Aluki.Runtime.Memory/Recall/`): deterministic,
+    accent-insensitive, conservative — greetings/thanks/acks/emoji-only (≤4 trivial
+    tokens, no `?`/`¿`) skip embedding + vector search + recall audit entirely. A
+    skipped recall writes NO recall-audit event by design (the WORM rule governs
+    events that occurred) and must NOT append `NoMemoryMessageSuffix`. Log marker:
+    `recall.skipped_trivial`. Link-save intent is also checked BEFORE the recall
+    barrier in `ConversationalResponseAgent` (link saves pay zero recall cost).
+  - **`ChatCallSettings`** (`Aluki.Runtime.Memory/Chat/ChatModelRouter.cs`): per-call
+    `MaxOutputTokens`/`Temperature` via a 4-arg `IChatModelRouter.CompleteAsync`
+    overload (default interface method keeps 3-arg stubs compatible). Conversational
+    replies cap at 800 output tokens (Conversational + Shelo main paths), feedback
+    YES/NO at 100. Callers that parse JSON (ReminderIntentParser, YouTube
+    classification, structured extraction, entity resolution, Shelo sale label) MUST
+    stay uncapped. Temperature deliberately unset (model-router can route to
+    reasoning models that reject it). Router pipeline: `maxRetries=1`,
+    `NetworkTimeout=30s` (SDK default ~3-retry backoff stacked past caller CTS).
+  - **Capture claim-first pipeline** (`WhatsAppCaptureCoordinator`): (1) idempotency
+    claim commits in a short transaction BEFORE dispatch (redelivery can never cause
+    a second reply); (2) artifact persistence (inbound/message/media + capture audit)
+    runs in a background task on CancellationToken.None with bounded retry, in
+    PARALLEL with domain-agent dispatch; (3) the persist task is joined before
+    `CaptureAsync` returns. Accepted trade-off: a terminal persist failure leaves the
+    claim committed (redelivery suppressed without content) — preferred over a
+    duplicate user-visible reply; `WriteFailedTerminalAsync` records it for replay.
+    `unified_message_artifact.created_at_utc` is stamped from the provider receipt
+    time (`normalized.ReceivedAtUtc`) so history ordering stays inbound-before-reply.
+  - **Postgres**: `NpgsqlConnectionFactory` now wraps a singleton pooled
+    `NpgsqlDataSource` (public surface unchanged).
+    `ScopedSessionContextSetter.CreateApplyBatchCommand` folds the RLS `set_config`
+    into the same round-trip as the first statement (used by `MemoryStore` hot paths).
+    The `set_config` in `ConversationHistoryStore` was REMOVED — it was a no-op
+    (mis-named GUC `app.current_tenant_id` + transaction-local outside a transaction);
+    isolation there is enforced by explicit WHERE tenant/user filters.
+  - **Typing indicator is fire-and-forget** (see WhatsApp channel behavior below).
+  - **Azure AI HTTP**: all AOAI clients (chat router, embeddings, transcription,
+    receipt OCR) share `AzureAiSharedHttp.Client` (bounded `PooledConnectionLifetime`
+    2 min) — fixes the stale-idle-connection stall on first call after idle. Meta
+    messenger typed client has a 10 s timeout. `StorageQueueMediaDownloadQueue`
+    caches its `QueueClient` and runs `CreateIfNotExists` lazily once.
+  - **Reminder timezone cache**: `ReminderDomainAgent` caches per-user timezone
+    (24 h memory-resolved / 15 min miss) so reminders after the first skip the recall.
+  - **SheloNabel catalog compacted** to one dense line per product (~3k → ~1k system
+    tokens per message); ALL products/prices/doses/contraindications preserved and
+    pinned by `SheloNabelProductCatalogTests`. Security prompt sections untouched.
+  - **Deploy**: Functions publish uses `-r linux-x64 --self-contained false
+    -p:PublishReadyToRun=true` (cold-start JIT cut). Assumes a Linux Function App —
+    verify `az functionapp show -n func-araluki-dev-6155 -g ar-Aluki --query kind`
+    before the first merge to main.
+  - **Ops follow-ups (manual, not in repo — need cost approval)**: (a) warm instance
+    for `WestUS3Plan` (Always-On if dedicated / `minimum-elastic-instances`+
+    `preWarmedInstanceCount` if Elastic Premium / `always-ready` if Flex) — biggest
+    lever on first-message-after-idle; (b) co-locate a Foundry model-router +
+    embeddings deployment in West US (today eastus2 ⇒ cross-region RTT on every
+    LLM/embedding call); (c) verify pgvector `extversion ≥ 0.5.0` before migration
+    027 applies.
+  - **Deferred (do not implement without need)**: queue-based 200-before-processing
+    webhook — it would break the "webhook holds the process" property the
+    fire-then-join WORM patterns rely on; revisit only if p95 webhook duration
+    still exceeds ~10 s after this work.
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 
@@ -317,14 +396,16 @@ Directive: ALL AI inference goes through Azure OpenAI or Azure AI Foundry.
   Always 200s so Meta does not retry; capture idempotency makes redelivery safe.
 - **Read receipt + typing indicator** (`IWhatsAppMessenger` /
   `MetaWhatsAppMessenger`): on every inbound message the webhook immediately
-  sends a single Graph API call to `/{phone_number_id}/messages` with
-  `status=read` + `typing_indicator:{type:text}`. This shows the sender the blue
+  dispatches (fire-and-forget `Task.Run`, `CancellationToken.None` — SB-014) a
+  single Graph API call to `/{phone_number_id}/messages` with
+  `status=read` + `typing_indicator:{type:text}`, so capture starts without
+  waiting on the Meta round-trip. This shows the sender the blue
   double-check (read) and the "…" typing bubble (auto-dismisses after ~25s or on
   next message). Best-effort; never blocks or fails capture. `phone_number_id`
   comes from the webhook payload (`value.metadata.phone_number_id`), extracted by
   `MetaWebhookMapper.ExtractReadReceiptTargets`. The Functions deployment wires
-  the real messenger via `AddHttpClient<IWhatsAppMessenger, MetaWhatsAppMessenger>`;
-  Host/tests use `NullWhatsAppMessenger`.
+  the real messenger via `AddHttpClient<IWhatsAppMessenger, MetaWhatsAppMessenger>`
+  (10 s timeout); Host/tests use `NullWhatsAppMessenger`.
 - Graph config: `Meta:AccessToken`, `Meta:GraphBaseUrl` (default
   `https://graph.facebook.com/v21.0`). Same token used by media download.
 
