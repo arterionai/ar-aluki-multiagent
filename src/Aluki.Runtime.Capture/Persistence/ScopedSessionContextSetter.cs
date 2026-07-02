@@ -27,4 +27,20 @@ public static class ScopedSessionContextSetter
 
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    /// <summary>
+    /// Same GUC application as <see cref="ApplyAsync"/> but as a batch command, so
+    /// callers can fold it into the same round-trip as their first real statement
+    /// (prepend it to an <see cref="NpgsqlBatch"/> and skip its result set with
+    /// <c>reader.NextResultAsync</c>).
+    /// </summary>
+    public static NpgsqlBatchCommand CreateApplyBatchCommand(Guid tenantId, Guid? userId)
+    {
+        var command = new NpgsqlBatchCommand(
+            "select set_config('app.current_tenant', @tenant, true), " +
+            "       set_config('app.current_user_id', @user, true);");
+        command.Parameters.AddWithValue("tenant", tenantId.ToString());
+        command.Parameters.AddWithValue("user", userId?.ToString() ?? string.Empty);
+        return command;
+    }
 }

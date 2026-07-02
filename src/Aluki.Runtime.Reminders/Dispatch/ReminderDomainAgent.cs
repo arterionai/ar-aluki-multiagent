@@ -21,6 +21,14 @@ public sealed class ReminderDomainAgent : IDomainAgent
     public const string Id = "reminders.whatsapp_scheduler";
     private const string DefaultTimezone = "America/Mexico_City";
 
+    // Per-user timezone cache (the agent is a singleton). A memory-resolved timezone
+    // is stable, so hits skip the embedding + vector recall on every reminder after
+    // the first. Misses are cached briefly to avoid hammering recall, short enough
+    // that a user who just told us their city is picked up quickly.
+    private static readonly TimeSpan ResolvedTtl = TimeSpan.FromHours(24);
+    private static readonly TimeSpan MissTtl = TimeSpan.FromMinutes(15);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, (string Timezone, bool FromMemory, DateTimeOffset CachedAt)> _timezoneCache = new();
+
     private readonly ReminderService _reminderService;
     private readonly ReminderIntentParser _parser;
     private readonly MemoryRecallService _recallService;
@@ -162,6 +170,12 @@ public sealed class ReminderDomainAgent : IDomainAgent
         string correlationId,
         CancellationToken ct)
     {
+        if (_timezoneCache.TryGetValue(principal.UserId, out var cached)
+            && DateTimeOffset.UtcNow - cached.CachedAt < (cached.FromMemory ? ResolvedTtl : MissTtl))
+        {
+            return (cached.Timezone, cached.FromMemory);
+        }
+
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -191,6 +205,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
                     _logger.LogInformation(
                         "ReminderDomainAgent: resolved timezone {Timezone} from memory. correlation_id={CorrelationId}",
                         tz, correlationId);
+                    _timezoneCache[principal.UserId] = (tz, true, DateTimeOffset.UtcNow);
                     return (tz, true);
                 }
             }
@@ -202,6 +217,7 @@ public sealed class ReminderDomainAgent : IDomainAgent
                 correlationId);
         }
 
+        _timezoneCache[principal.UserId] = (DefaultTimezone, false, DateTimeOffset.UtcNow);
         return (DefaultTimezone, false);
     }
 
