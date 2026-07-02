@@ -8,7 +8,7 @@ documented intended behaviors without explicit instruction.
 - `Aluki.Runtime.slnx` — projects: `Abstractions`, `Capture`, `Memory`,
   `Extraction`, `Calendar` (calendar engine shared lib), `Functions` (Azure
   Functions isolated worker, the deployed unit), `Host` (ASP.NET Core, not
-  deployed), plus `tests/{unit,contract,integration}`.
+  deployed), plus `tests/{unit,contract,integration,e2e}`.
 - .NET 10 (`net10.0`), C#. Local SDK at `/tmp/dotnet`.
 - Build: `dotnet build Aluki.Runtime.slnx -c Release`.
 - Tests by category trait: `Unit`, `Contract`, `Integration`. Integration tests
@@ -364,6 +364,31 @@ documented intended behaviors without explicit instruction.
     sobre *{topic}*". Registered in `AddPersonalMemory()`.
   - **Tests**: `NoteDeletionDetectorTests` (unit) + `NoteDeletionDomainAgentContractTests`
     (contract). 607 total (360 unit + 247 contract).
+- **SB-017 E2E Live Validation** — done (on branch, pending merge). Spec at
+  `specs/017-e2e-live-validation/spec.md`. No new migration.
+  - **Problem solved**: no automated test exercised the full production stack (Meta webhook
+    → Azure Function → dispatch → agent → WhatsApp reply → Postgres). Unit and contract tests
+    cover components in isolation; this suite validates the deployed system end-to-end.
+  - **Project**: `tests/e2e/Aluki.Runtime.E2ETests/` (`Category=E2E`). NOT run on merge to
+    `main` — the deploy CI uses `Category=Unit|Category=Contract` only. Triggered via
+    `workflow_dispatch` (`e2e-whatsapp.yml`).
+  - **Fixture** (`WhatsAppE2EFixture`): reads 5 env vars (see below), verifies seeded principal
+    exists, runs preflight probe to detect SheloNabel routing (priority-40 agent intercepts
+    before Aluki agents). If detected, T03–T13 return early (pass, not applicable).
+  - **14 scenarios** ordered by `xunit.extensions.ordering`: T01 (HTTP 200 contract),
+    T02 (invalid sig → 401), T03 (note save → `¡Anotado! 📒`), T04 (lookup found → `📇 *Fer*`),
+    T05 (lookup not found), T06 (deletion match → `Olvidado 🗑️`), T07 (deletion no match),
+    T08 (reminder scheduled → `✅` + DB row), T09 (reminder clarification), T10 (calendar
+    scheduling), T11 (link save → `Guardado 🔗`), T12 (on-scope LLM), T13 (off-scope LLM
+    redirect), T14 (no `contained_failure` audit events).
+  - **Assertions**: `app.outbound_messages` (body ILIKE pattern, 30s poll), `app.dispatch_audit_events`
+    joined to `app.unified_message_artifact` via `provider_message_id = wamid` (agent ID), `app.reminders`
+    (for T08).
+  - **Env vars**: `E2E_FUNCTION_URL` (default prod), `E2E_META_APP_SECRET` (KV `Meta--AppSecret`),
+    `E2E_META_PHONE_NUMBER_ID` (KV `Meta--PhoneNumberId`), `E2E_POSTGRES_CONNECTION`
+    (KV `PostgresConnectionString`), `E2E_SENDER_WA_ID` (hardcoded `14252307522`).
+  - **CI**: OIDC login → KV fetch → firewall open → `dotnet test` → firewall close (always).
+    Same 3 OIDC secrets as deploy workflow (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`).
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 

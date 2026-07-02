@@ -1,0 +1,85 @@
+name: E2E WhatsApp Live Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      function_url:
+        description: 'Deployed Function base URL'
+        required: false
+        default: 'https://func-araluki-dev-6155.azurewebsites.net'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  e2e:
+    name: Live E2E Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Open Postgres firewall for runner IP
+        run: |
+          RUNNER_IP=$(curl -s https://api.ipify.org)
+          az postgres flexible-server firewall-rule create \
+            --resource-group ar-Aluki \
+            --name pg-araluki-dev-6155 \
+            --rule-name e2e-runner-${{ github.run_id }} \
+            --start-ip-address "$RUNNER_IP" \
+            --end-ip-address "$RUNNER_IP"
+
+      - name: Fetch secrets from Key Vault
+        id: kv
+        run: |
+          {
+            echo "POSTGRES=$(az keyvault secret show --vault-name kvaralukidev6155 --name PostgresConnectionString --query value -o tsv)"
+            echo "META_SECRET=$(az keyvault secret show --vault-name kvaralukidev6155 --name Meta--AppSecret --query value -o tsv)"
+            echo "PHONE_NUMBER_ID=$(az keyvault secret show --vault-name kvaralukidev6155 --name Meta--PhoneNumberId --query value -o tsv)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Restore dependencies
+        run: dotnet restore tests/e2e/Aluki.Runtime.E2ETests/Aluki.Runtime.E2ETests.csproj
+
+      - name: Run E2E tests
+        env:
+          E2E_FUNCTION_URL: ${{ inputs.function_url }}
+          E2E_META_APP_SECRET: ${{ steps.kv.outputs.META_SECRET }}
+          E2E_META_PHONE_NUMBER_ID: ${{ steps.kv.outputs.PHONE_NUMBER_ID }}
+          E2E_POSTGRES_CONNECTION: ${{ steps.kv.outputs.POSTGRES }}
+          E2E_SENDER_WA_ID: '14252307522'
+        run: |
+          dotnet test tests/e2e/Aluki.Runtime.E2ETests/ \
+            --filter "Category=E2E" \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=e2e-results.trx" \
+            --no-restore
+
+      - name: Close Postgres firewall
+        if: always()
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group ar-Aluki \
+            --name pg-araluki-dev-6155 \
+            --rule-name e2e-runner-${{ github.run_id }} \
+            --yes || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: '**/*.trx'

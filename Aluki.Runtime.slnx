@@ -16,5 +16,6 @@
     <Project Path="tests/unit/Aluki.Runtime.UnitTests/Aluki.Runtime.UnitTests.csproj" />
     <Project Path="tests/contract/Aluki.Runtime.ContractTests/Aluki.Runtime.ContractTests.csproj" />
     <Project Path="tests/integration/Aluki.Runtime.IntegrationTests/Aluki.Runtime.IntegrationTests.csproj" />
+    <Project Path="tests/e2e/Aluki.Runtime.E2ETests/Aluki.Runtime.E2ETests.csproj" />
   </Folder>
 </Solution>
