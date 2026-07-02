@@ -324,6 +324,21 @@ documented intended behaviors without explicit instruction.
     with `CancellationToken.None`. Registered in `AddPersonalMemory()`.
   - **Tests**: `PersonLookupDetectorTests` (unit) + `PersonLookupDomainAgentContractTests`
     (contract). 569 total (340 unit + 229 contract).
+- **SB-015 Semantic Graph Ingestion Glue** — done (not yet deployed). Spec at
+  `specs/015-semantic-graph-ingestion/spec.md`. No new migration.
+  - **Problem solved**: SB-011 shipped entity resolution/traversal, but nothing in
+    the WhatsApp pipeline called `IEntityResolutionService.ResolveAsync` — the graph
+    tables stayed empty for real users (only the manual HTTP endpoints wrote to them).
+  - **Trigger**: `PersonMemoryDomainAgent.HandleAsync` (SB-013) now runs entity
+    resolution **fire-and-forget** (`Task.Run`) after ingesting the note. Optional
+    dependency: the agent takes `IServiceScopeFactory?` (default null) and resolves
+    `IEntityResolutionService` with `GetService` from a fresh scope — hosts without
+    `AddSemanticGraph()` skip silently; failures are logged and swallowed. Standalone
+    CTS 60 s (never the webhook ct). Fact linkage (`semantic_entity_facts`) is a
+    follow-up: `IMemoryIngestionSink` returns void, so the artifact ID isn't available.
+  - **Tests**: 3 new contract tests in `PersonMemoryDomainAgentContractTests`
+    (resolution invoked with note text+tenant, null-factory unchanged behavior,
+    resolution failure doesn't affect save). 572 total (340 unit + 232 contract).
 
 ## AI inference — MUST use Azure OpenAI or Azure AI Foundry
 
